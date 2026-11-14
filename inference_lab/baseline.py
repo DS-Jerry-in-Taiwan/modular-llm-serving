@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import platform
@@ -13,85 +12,18 @@ import threading
 import time
 
 from .acquisition import verify_model
-from .preflight import command, gpu_probe, memory_probe
-from .runtime import LocalServer, RuntimeFailure, RunCancelled, cancellation_signal, new_run, runtime_identity
-from .tasks import load_dataset, evaluate, output_hash, write_json_new
-
-
-def digest_json(value):
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+from .telemetry import command, gpu_probe, memory_probe
+from .runtime import LocalServer, RuntimeFailure, RunCancelled, cancellation_signal, runtime_identity
+from .tasks import load_dataset, evaluate
+from .telemetry import ResourceSampler, response_metrics
+from .artifacts import digest_json, output_hash, write_json_new, new_run
 
 
 def source_identity():
     root = Path(__file__).resolve().parent
-    hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in ("baseline.py", "runtime.py", "acquisition.py", "tasks.py", "preflight.py")}
+    hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in ("baseline.py", "runtime.py", "acquisition.py", "tasks.py", "config.py", "telemetry.py", "artifacts.py")}
     return {"files": hashes, "sha256": digest_json(hashes), "git_commit": command(["git", "rev-parse", "HEAD"]),
             "git_status": command(["git", "status", "--short"])}
-
-
-def process_rss(pid):
-    if callable(pid):
-        pid = pid()
-    if pid is None:
-        return None
-    try:
-        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-            if line.startswith("VmRSS:"):
-                return int(line.split()[1]) * 1024
-    except (OSError, ValueError):
-        pass
-    return None
-
-
-class ResourceSampler:
-    """Sampled maxima, not continuous peaks; device and system scopes explicit."""
-    def __init__(self, interval=0.25):
-        self.interval = interval
-        self.pid = None
-        self.samples = []
-        self.stop_event = threading.Event()
-        self.worker = None
-        self.start_time = None
-        self.lock = threading.Lock()
-
-    def sample(self):
-        gpu = gpu_probe()
-        memory = memory_probe()
-        values = {"monotonic_offset_seconds": time.monotonic() - self.start_time,
-                  "gpu_device_used_bytes": gpu.get("memory_used_bytes"),
-                  "system_memory_used_bytes": memory.get("MemTotal_bytes", 0) - memory.get("MemAvailable_bytes", 0) if memory.get("status") == "ok" else None,
-                  "server_rss_bytes": process_rss(self.pid)}
-        with self.lock:
-            self.samples.append(values)
-
-    def start(self):
-        self.start_time = time.monotonic()
-        self.sample()
-        def loop():
-            while not self.stop_event.wait(self.interval):
-                self.sample()
-        self.worker = threading.Thread(target=loop, daemon=True)
-        self.worker.start()
-
-    def stop(self):
-        self.stop_event.set()
-        if self.worker is not None:
-            self.worker.join(timeout=3)
-            if self.worker.is_alive():
-                raise RuntimeFailure("resource sampler did not stop")
-        self.sample()
-
-    def summary(self, start_offset=None, end_offset=None):
-        with self.lock:
-            selected = [s for s in self.samples if (start_offset is None or s["monotonic_offset_seconds"] >= start_offset) and (end_offset is None or s["monotonic_offset_seconds"] <= end_offset)]
-        result = {"interval_seconds": self.interval, "sample_count": len(selected), "scope": {
-            "gpu_device_used_bytes": "whole GPU including other processes; sampled maximum, not continuous peak",
-            "system_memory_used_bytes": "host MemTotal-MemAvailable; includes competing workloads and reclaimable-memory estimate",
-            "server_rss_bytes": "owned server process VmRSS only; not all host RAM or child RSS"}}
-        for metric in ("gpu_device_used_bytes", "system_memory_used_bytes", "server_rss_bytes"):
-            values = [s[metric] for s in selected if s[metric] is not None]
-            result[metric] = {"status": "ok", "sampled_peak_bytes": max(values)} if values else {"status": "unavailable", "reason": "no valid samples"}
-        return result
 
 
 def aggregate_samples(samples):
@@ -104,20 +36,6 @@ def aggregate_samples(samples):
             metrics[key] = {"status": "ok", "count": len(values), "mean": statistics.mean(values), "median": statistics.median(values), "min": min(values), "max": max(values)} if values else {"status": "unavailable"}
         result[case_id] = metrics
     return result
-
-
-def response_metrics(result):
-    response = result["response"]
-    timings = response.get("timings", {})
-    def number(value):
-        return {"status": "ok", "value": value} if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else {"status": "unavailable", "reason": "not returned by engine"}
-    return {"request_seconds": number(result["elapsed_seconds"]),
-            "prompt_tokens_per_second": number(timings.get("prompt_per_second")),
-            "generated_tokens_per_second": number(timings.get("predicted_per_second")),
-            "ttft_seconds": {"status": "unavailable", "reason": "non-stream HTTP response; first token arrival not observed"},
-            "cached_prompt_tokens": number(response.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens")),
-            "prompt_tokens": number(response.get("usage", {}).get("prompt_tokens")),
-            "generated_tokens": number(response.get("usage", {}).get("completion_tokens"))}
 
 
 def baseline(config, dataset_path, binary, model_path, output_root, repeats=2, baseline_run_id=None):

@@ -2,128 +2,18 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
-import ctypes.util
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import platform
-import re
 import shutil
-import subprocess
 import urllib.error
 import urllib.request
 
-SCHEMA_VERSION = 1
-
-
-def load_config(path):
-    config = json.loads(Path(path).read_text())
-    if config.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError("unsupported configuration schema_version")
-    for key in ("experiment_id", "model", "runtime", "resources", "budgets"):
-        if key not in config:
-            raise ValueError(f"missing {key}")
-    model = config["model"]
-    for key in ("repository", "revision", "filename", "sha256", "size_bytes"):
-        if key not in model:
-            raise ValueError(f"missing model.{key}")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", model["repository"]):
-        raise ValueError("model repository must be owner/name")
-    if not re.fullmatch(r"[0-9a-f]{40}", model["revision"]):
-        raise ValueError("model revision must be immutable 40-character commit")
-    if not re.fullmatch(r"[0-9a-f]{64}", model["sha256"]):
-        raise ValueError("model sha256 must be 64 hexadecimal characters")
-    if not isinstance(model["filename"], str) or Path(model["filename"]).name != model["filename"]:
-        raise ValueError("model filename must be a basename")
-    for group, key in ((model, "size_bytes"), (config["resources"], "disk_reserve_bytes"),
-                       (config["budgets"], "download_bytes"), (config["budgets"], "smoke_seconds"),
-                       (config["budgets"], "experiment_seconds")):
-        if type(group.get(key)) is not int or group[key] <= 0:
-            raise ValueError(f"{key} must be a positive integer")
-    if model["size_bytes"] > config["budgets"]["download_bytes"]:
-        raise ValueError("model exceeds download budget")
-    if not re.fullmatch(r"[0-9a-f]{40}", config["runtime"].get("revision", "")):
-        raise ValueError("runtime revision must be immutable")
-    for key in ("context_size", "gpu_layers", "threads", "parallel"):
-        if type(config["runtime"].get(key)) is not int or config["runtime"][key] <= 0:
-            raise ValueError(f"runtime.{key} must be a positive integer")
-    if config["runtime"]["parallel"] != 1:
-        raise ValueError("only one inference slot is supported")
-    return config
-
-
-def command(argv):
-    try:
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=10)
-        return {"status": "ok" if result.returncode == 0 else "unavailable",
-                "returncode": result.returncode, "output": result.stdout.strip()[:4096]}
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"status": "unavailable", "reason": type(exc).__name__}
-
-
-def gpu_probe(library_path=None):
-    """NVML success is required; device nodes or empty nvidia-smi are insufficient."""
-    try:
-        library = ctypes.CDLL(library_path or ctypes.util.find_library("nvidia-ml") or "libnvidia-ml.so.1")
-        code = library.nvmlInit_v2()
-        if code:
-            return {"status": "unavailable", "reason": f"nvmlInit_v2={code}"}
-        try:
-            count = ctypes.c_uint()
-            code = library.nvmlDeviceGetCount_v2(ctypes.byref(count))
-            if code or not count.value:
-                return {"status": "unavailable", "reason": f"device_count={count.value}, rc={code}"}
-            handle = ctypes.c_void_p()
-            code = library.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle))
-            if code:
-                return {"status": "unavailable", "reason": f"device_handle={code}"}
-            name = ctypes.create_string_buffer(96)
-            code = library.nvmlDeviceGetName(handle, name, 96)
-            if code:
-                return {"status": "unavailable", "reason": f"device_name={code}"}
-            class Memory(ctypes.Structure):
-                _fields_ = [(k, ctypes.c_ulonglong) for k in ("total", "free", "used")]
-            memory = Memory()
-            code = library.nvmlDeviceGetMemoryInfo(handle, ctypes.byref(memory))
-            if code:
-                return {"status": "unavailable", "reason": f"memory_info={code}"}
-            return {"status": "ok", "name": name.value.decode(), "count": count.value,
-                    "memory_total_bytes": memory.total, "memory_free_bytes": memory.free,
-                    "memory_used_bytes": memory.used}
-        finally:
-            library.nvmlShutdown()
-    except (OSError, AttributeError) as exc:
-        return {"status": "unavailable", "reason": str(exc)[:300]}
-
-
-def cuda_probe(library_path=None):
-    """Initialize the driver API; NVML telemetry alone does not establish CUDA."""
-    try:
-        library = ctypes.CDLL(library_path or ctypes.util.find_library("cuda") or "libcuda.so.1")
-        code = library.cuInit(0)
-        if code:
-            return {"status": "unavailable", "reason": f"cuInit={code}"}
-        count = ctypes.c_int()
-        code = library.cuDeviceGetCount(ctypes.byref(count))
-        if code or count.value < 1:
-            return {"status": "unavailable", "reason": f"cuda_device_count={count.value}, rc={code}"}
-        return {"status": "ok", "device_count": count.value}
-    except (OSError, AttributeError) as exc:
-        return {"status": "unavailable", "reason": str(exc)[:300]}
-
-
-def memory_probe():
-    result = {}
-    try:
-        for line in Path("/proc/meminfo").read_text().splitlines():
-            key, value = line.split(":", 1)
-            if key in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
-                result[key + "_bytes"] = int(value.split()[0]) * 1024
-    except (OSError, ValueError):
-        return {"status": "unavailable"}
-    return {"status": "ok", **result}
+from .config import SCHEMA_VERSION, load_config
+from .telemetry import command, gpu_probe, cuda_probe, memory_probe
+from .artifacts import write_json_new
 
 
 def model_probe(model):
@@ -186,8 +76,6 @@ def main(argv=None):
     output.parent.mkdir(parents=True, exist_ok=True)
     report = preflight(config, output.parent, args.check_network, args.cuda_library, args.nvml_library)
     # Do not overwrite prior evidence.
-    with output.open("x") as handle:
-        json.dump(report, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    write_json_new(output, report)
     print(json.dumps({"status": report["status"], "blockers": report["blockers"], "report": str(output)}))
     return 0 if report["status"] == "ready_for_runtime_validation" else 2

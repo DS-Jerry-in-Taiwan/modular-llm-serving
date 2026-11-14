@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from inference_lab.baseline import digest_json
+from inference_lab.artifacts import digest_json
 from inference_lab.comparison import compare, ComparisonError, load_evidence, config_differences
 
 

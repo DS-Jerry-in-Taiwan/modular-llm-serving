@@ -2,7 +2,8 @@
 import argparse
 import json
 import sys
-from .preflight import load_config, main as preflight_main
+from .config import load_config
+from .preflight import main as preflight_main
 from .acquisition import acquire_model
 from .runtime import smoke
 from .tasks import suite, apply_review

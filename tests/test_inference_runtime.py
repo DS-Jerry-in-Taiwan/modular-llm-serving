@@ -5,7 +5,8 @@ import time
 import unittest
 from unittest.mock import patch
 
-from inference_lab.acquisition import verify_model, sha256_file, acquire_model
+from inference_lab.acquisition import verify_model, acquire_model
+from inference_lab.artifacts import sha256_file
 from inference_lab.runtime import LocalServer, RuntimeFailure, HttpResponseFailure, smoke, http_json, runtime_identity
 
 

@@ -9,8 +9,9 @@ import threading
 import time
 
 from .acquisition import verify_model
-from .preflight import command, gpu_probe, memory_probe
-from .runtime import LocalServer, RuntimeFailure, RunCancelled, cancellation_signal, new_run, runtime_identity
+from .artifacts import output_hash, write_json_new, new_run
+from .telemetry import command, gpu_probe, memory_probe
+from .runtime import LocalServer, RuntimeFailure, RunCancelled, cancellation_signal, runtime_identity
 
 
 def load_dataset(path):
@@ -55,10 +56,6 @@ def unique_object(pairs):
     return result
 
 
-def output_hash(result):
-    return hashlib.sha256(result["content"].encode("utf-8")).hexdigest()
-
-
 def evaluate(case, result):
     content = result["content"]
     checks = {"not_truncated": not result.get("truncated", False)}
@@ -78,12 +75,6 @@ def evaluate(case, result):
             "quality_status": "pending_review" if case["manual_required"] else ("pass" if passed else "fail"),
             "rubric": case["rubric"],
             "note": "Fact/keyword filters flag candidates only; manual rubric review determines summary/code quality." if case["manual_required"] else "Exact typed JSON equality, no extra fields or text."}
-
-
-def write_json_new(path, data):
-    with Path(path).open("x") as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
 
 
 def suite(config, dataset_path, binary, model_path, output_root):

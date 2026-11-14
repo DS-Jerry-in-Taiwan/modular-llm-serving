@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from inference_lab.tasks import load_dataset, evaluate, strict_equal, apply_review, render_report, suite, output_hash
+from inference_lab.tasks import load_dataset, evaluate, strict_equal, apply_review, render_report, suite
+from inference_lab.artifacts import output_hash
 
 DATASET = Path(__file__).resolve().parents[1] / "experiments" / "tasks-v1.json"
 

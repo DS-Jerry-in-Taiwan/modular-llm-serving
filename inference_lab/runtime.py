@@ -13,10 +13,10 @@ import time
 import threading
 import urllib.error
 import urllib.request
-import uuid
 
-from .acquisition import sha256_file, verify_model
-from .preflight import command, gpu_probe, memory_probe
+from .acquisition import verify_model
+from .artifacts import sha256_file, new_run, write_json_new
+from .telemetry import command, gpu_probe, memory_probe
 
 
 class RuntimeFailure(RuntimeError):
@@ -226,14 +226,6 @@ class LocalServer:
         return {"gpu_layers_observed": max(layers, default=0), "log_lines": lines[-30:]}
 
 
-def new_run(output_root, kind):
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:10]
-    directory = Path(output_root) / run_id
-    directory.mkdir(parents=True, exist_ok=False)
-    return directory, {"schema_version": 1, "run_id": run_id, "kind": kind,
-                       "started_at_utc": datetime.now(timezone.utc).isoformat(), "status": "running"}
-
-
 def runtime_identity(binary, configured_revision):
     binary = str(Path(binary).resolve())
     version = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
@@ -295,9 +287,7 @@ def smoke(config, binary, model_path, output_root, prompt="Reply with exactly: i
             record["cleanup_confirmed"] = True
         record["elapsed_seconds"] = time.monotonic() - start
         record["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
-        with (run_dir / "run.json").open("x") as handle:
-            json.dump(record, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
+        write_json_new(run_dir / "run.json", record)
         for sig, old_handler in previous_signals.items():
             signal.signal(sig, old_handler)
     return record, run_dir

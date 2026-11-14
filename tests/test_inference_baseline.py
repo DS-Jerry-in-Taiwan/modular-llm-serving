@@ -6,8 +6,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from inference_lab.baseline import ResourceSampler, aggregate_samples, response_metrics, source_identity, baseline, apply_baseline_review, quality_results
-from inference_lab.tasks import load_dataset, output_hash
+from inference_lab.baseline import aggregate_samples, source_identity, baseline, apply_baseline_review, quality_results
+from inference_lab.telemetry import ResourceSampler, response_metrics
+from inference_lab.tasks import load_dataset
+from inference_lab.artifacts import output_hash
 
 DATASET = Path(__file__).resolve().parents[1] / "experiments" / "tasks-v1.json"
 
@@ -28,13 +30,25 @@ class BaselineTests(unittest.TestCase):
     def test_sampled_peaks_scope_and_unavailable_not_zero(self):
         sampler = ResourceSampler(0.1)
         sampler.start_time = time.monotonic()
-        with patch("inference_lab.baseline.gpu_probe", return_value={"status": "ok", "memory_used_bytes": 456}), patch("inference_lab.baseline.memory_probe", return_value={"status": "ok", "MemTotal_bytes": 1000, "MemAvailable_bytes": 300}):
+        with patch("inference_lab.telemetry.gpu_probe", return_value={"status": "ok", "memory_used_bytes": 456}), patch("inference_lab.telemetry.memory_probe", return_value={"status": "ok", "MemTotal_bytes": 1000, "MemAvailable_bytes": 300}):
             sampler.sample()
         summary = sampler.summary()
         self.assertEqual(summary["gpu_device_used_bytes"]["sampled_peak_bytes"], 456)
         self.assertEqual(summary["system_memory_used_bytes"]["sampled_peak_bytes"], 700)
         self.assertEqual(summary["server_rss_bytes"]["status"], "unavailable")
         self.assertIn("whole GPU", summary["scope"]["gpu_device_used_bytes"])
+
+    def test_sampler_stop_failure_is_reported(self):
+        sampler = ResourceSampler()
+        class StuckWorker:
+            def join(self, timeout):
+                pass
+            def is_alive(self):
+                return True
+        sampler.worker = StuckWorker()
+        with self.assertRaisesRegex(RuntimeError, 'resource sampler did not stop'):
+            sampler.stop()
+        self.assertTrue(sampler.stop_event.is_set())
 
     def test_repeat_aggregates_keep_variation(self):
         samples = [{"case_id": "one", "status": "completed", "metrics": {key: {"status": "ok", "value": v} for key in ("request_seconds", "prompt_tokens_per_second", "generated_tokens_per_second")}} for v in (2, 4)]
@@ -45,6 +59,8 @@ class BaselineTests(unittest.TestCase):
         identity = source_identity()
         self.assertIn("baseline.py", identity["files"])
         self.assertIn("runtime.py", identity["files"])
+        for name in ('config.py', 'telemetry.py', 'artifacts.py'):
+            self.assertIn(name, identity['files'])
         self.assertNotIn("comparison.py", identity["files"])
         self.assertEqual(len(identity["sha256"]), 64)
 
