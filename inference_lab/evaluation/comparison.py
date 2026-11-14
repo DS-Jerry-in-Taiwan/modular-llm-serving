@@ -7,9 +7,9 @@ import math
 from pathlib import Path
 import statistics
 
-from .artifacts import digest_json
+from ..artifacts import digest_json
 from .tasks import evaluate
-from .artifacts import output_hash, write_json_new
+from ..artifacts import output_hash, write_json_new
 
 
 class ComparisonError(ValueError):

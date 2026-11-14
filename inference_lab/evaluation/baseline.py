@@ -1,6 +1,7 @@
 """Repeated baseline measurements with explicit cache/metric scope and provenance."""
 from __future__ import annotations
 from datetime import datetime, timezone
+import ast
 import hashlib
 import json
 import os
@@ -11,17 +12,43 @@ import statistics
 import threading
 import time
 
-from .acquisition import verify_model
-from .telemetry import command, gpu_probe, memory_probe
-from .runtime import LocalServer, RuntimeFailure, RunCancelled, cancellation_signal, runtime_identity
+from ..acquisition import verify_model
+from ..telemetry import command, gpu_probe, memory_probe
+from ..runtime import LocalServer, RuntimeFailure, RunCancelled, cancellation_signal, runtime_identity
 from .tasks import load_dataset, evaluate
-from .telemetry import ResourceSampler, response_metrics
-from .artifacts import digest_json, output_hash, write_json_new, new_run
+from ..telemetry import ResourceSampler, response_metrics
+from ..artifacts import digest_json, output_hash, write_json_new, new_run
 
 
 def source_identity():
-    root = Path(__file__).resolve().parent
-    hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in ("baseline.py", "runtime.py", "acquisition.py", "tasks.py", "config.py", "telemetry.py", "artifacts.py")}
+    """Hash the measurement entrypoint and every repository-local dependency."""
+    root = Path(__file__).resolve().parents[1]
+    pending = [Path(__file__).resolve()]
+    visited = set()
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        # Importing a module also executes each containing package initializer.
+        parent = path.parent
+        while parent.is_relative_to(root):
+            initializer = parent / "__init__.py"
+            if initializer.is_file() and initializer not in visited:
+                pending.append(initializer)
+            parent = parent.parent
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and node.level:
+                package = path.parent
+                for _ in range(node.level - 1):
+                    package = package.parent
+                candidate = package.joinpath(*(node.module or "").split("."))
+                dependency = candidate.with_suffix(".py")
+                if not dependency.is_file():
+                    dependency = candidate / "__init__.py"
+                if dependency.is_file() and dependency.is_relative_to(root):
+                    pending.append(dependency)
+    hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(visited)}
     return {"files": hashes, "sha256": digest_json(hashes), "git_commit": command(["git", "rev-parse", "HEAD"]),
             "git_status": command(["git", "status", "--short"])}
 

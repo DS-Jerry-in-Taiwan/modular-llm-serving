@@ -8,10 +8,10 @@ import signal
 import threading
 import time
 
-from .acquisition import verify_model
-from .artifacts import output_hash, write_json_new, new_run
-from .telemetry import command, gpu_probe, memory_probe
-from .runtime import LocalServer, RuntimeFailure, RunCancelled, cancellation_signal, runtime_identity
+from ..acquisition import verify_model
+from ..artifacts import output_hash, write_json_new, new_run
+from ..telemetry import command, gpu_probe, memory_probe
+from ..runtime import LocalServer, RuntimeFailure, RunCancelled, cancellation_signal, runtime_identity
 
 
 def load_dataset(path):

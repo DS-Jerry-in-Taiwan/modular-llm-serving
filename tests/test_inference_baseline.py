@@ -1,4 +1,6 @@
 import hashlib
+import importlib.util
+import ast
 import json
 from pathlib import Path
 import tempfile
@@ -6,9 +8,9 @@ import time
 import unittest
 from unittest.mock import patch
 
-from inference_lab.baseline import aggregate_samples, source_identity, baseline, apply_baseline_review, quality_results
+from inference_lab.evaluation.baseline import aggregate_samples, source_identity, baseline, apply_baseline_review, quality_results
 from inference_lab.telemetry import ResourceSampler, response_metrics
-from inference_lab.tasks import load_dataset
+from inference_lab.evaluation.tasks import load_dataset
 from inference_lab.artifacts import output_hash
 
 DATASET = Path(__file__).resolve().parents[1] / "experiments" / "tasks-v1.json"
@@ -57,12 +59,37 @@ class BaselineTests(unittest.TestCase):
 
     def test_source_hashes_include_actual_execution_code_not_future_comparison(self):
         identity = source_identity()
-        self.assertIn("baseline.py", identity["files"])
+        self.assertIn("evaluation/baseline.py", identity["files"])
         self.assertIn("runtime.py", identity["files"])
         for name in ('config.py', 'telemetry.py', 'artifacts.py'):
             self.assertIn(name, identity['files'])
-        self.assertNotIn("comparison.py", identity["files"])
+        self.assertNotIn("evaluation/comparison.py", identity["files"])
         self.assertEqual(len(identity["sha256"]), 64)
+
+    def test_source_identity_covers_transitive_execution_and_detects_changes(self):
+        identity = source_identity()
+        expected = {'__init__.py', 'evaluation/__init__.py', 'evaluation/baseline.py', 'evaluation/tasks.py',
+                    'runtime.py', 'acquisition.py', 'artifacts.py', 'config.py', 'telemetry.py'}
+        self.assertEqual(set(identity['files']), expected)
+        root = DATASET.parent.parent / 'inference_lab'
+        original_read = Path.read_bytes
+        for name in expected:
+            changed = root / name
+            def changed_bytes(path):
+                raw = original_read(path)
+                return raw + b'\n# changed execution source\n' if path == changed else raw
+            with self.subTest(name=name), patch.object(Path, 'read_bytes', changed_bytes):
+                self.assertNotEqual(source_identity()['sha256'], identity['sha256'])
+
+    def test_evaluation_has_no_legacy_module_aliases_or_reverse_dependencies(self):
+        for name in ('tasks', 'baseline', 'comparison'):
+            self.assertIsNone(importlib.util.find_spec('inference_lab.' + name))
+            self.assertIsNotNone(importlib.util.find_spec('inference_lab.evaluation.' + name))
+        root = DATASET.parent.parent / 'inference_lab'
+        for name in ('config', 'artifacts', 'telemetry', 'runtime', 'acquisition', 'demo'):
+            tree = ast.parse((root / (name + '.py')).read_text())
+            imports = [node.module or '' for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+            self.assertFalse(any(module.startswith(('evaluation', 'inference_lab.evaluation')) for module in imports), name)
 
     def test_review_quality_cannot_pass_failed_or_truncated_samples(self):
         dataset, _ = load_dataset(DATASET)
@@ -77,7 +104,7 @@ class BaselineTests(unittest.TestCase):
             with self.assertRaises(ValueError): baseline({}, DATASET, "/unused", "/unused", "/tmp", n)
 
     def test_failed_preload_cannot_be_measurement_complete(self):
-        with tempfile.TemporaryDirectory() as d, patch("inference_lab.baseline.verify_model", side_effect=ValueError("bad hash")):
+        with tempfile.TemporaryDirectory() as d, patch("inference_lab.evaluation.baseline.verify_model", side_effect=ValueError("bad hash")):
             record, directory = baseline({"model": {}}, DATASET, "/unused", "/unused", d)
             self.assertEqual(record["status"], "failed")
             self.assertFalse(record["baseline_eligibility"]["measurement_complete"])

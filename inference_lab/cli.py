@@ -6,9 +6,9 @@ from .config import load_config
 from .preflight import main as preflight_main
 from .acquisition import acquire_model
 from .runtime import smoke
-from .tasks import suite, apply_review
-from .baseline import baseline, apply_baseline_review
-from .comparison import compare
+from .evaluation.tasks import suite, apply_review
+from .evaluation.baseline import baseline, apply_baseline_review
+from .evaluation.comparison import compare
 
 
 def main(argv=None):

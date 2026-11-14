@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from inference_lab.artifacts import digest_json
-from inference_lab.comparison import compare, ComparisonError, load_evidence, config_differences
+from inference_lab.evaluation.comparison import compare, ComparisonError, load_evidence, config_differences
 
 
 class ComparisonTests(unittest.TestCase):

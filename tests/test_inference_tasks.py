@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from inference_lab.tasks import load_dataset, evaluate, strict_equal, apply_review, render_report, suite
+from inference_lab.evaluation.tasks import load_dataset, evaluate, strict_equal, apply_review, render_report, suite
 from inference_lab.artifacts import output_hash
 
 DATASET = Path(__file__).resolve().parents[1] / "experiments" / "tasks-v1.json"
@@ -91,7 +91,7 @@ class TaskTests(unittest.TestCase):
             with self.assertRaises(ValueError): apply_review(self.root, path)
 
     def test_failed_model_suite_preserves_failed_run_and_cleanup(self):
-        with patch("inference_lab.tasks.verify_model", side_effect=ValueError("bad hash")):
+        with patch("inference_lab.evaluation.tasks.verify_model", side_effect=ValueError("bad hash")):
             run, directory = suite({"model": {}}, DATASET, "/unused", "/unused", self.root)
         self.assertEqual(run["status"], "failed")
         self.assertTrue(run["cleanup_confirmed"])
