@@ -1,5 +1,6 @@
 """No GPU needed: lifecycle serialization and hostile HTTP request boundaries."""
 import copy
+import errno
 import http.client
 import json
 from pathlib import Path
@@ -120,6 +121,126 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(len(FakeServer.instances), 1)
         self.assertNotIn('secret', json.dumps(result))
         with self.assertRaises(RuntimeError): self.manager.submit({'prompt': 'again'})
+
+    def test_evidence_write_failures_converge_and_allow_recovery(self):
+        original_write = demo.write_json_new
+        for target, error_code in [(target, code) for target in ['resource-samples.json', 'raw-response.json', 'variant-run', 'top-run', 'all'] for code in [errno.ENOSPC, errno.EACCES]]:
+            with self.subTest(target=target, error_code=error_code):
+                def fail_selected(path, value):
+                    selected = (target == 'all' and path.name != 'manifest.json') or path.name == target or (target == 'variant-run' and path.name == 'run.json' and path.parent.name == 'baseline') or (target == 'top-run' and path.name == 'run.json' and path.parent.parent == Path(self.temp.name))
+                    if selected:
+                        raise OSError(error_code, '/private/evidence-secret')
+                    original_write(path, value)
+                with patch.object(demo, 'write_json_new', side_effect=fail_selected):
+                    run_id = self.manager.submit({'prompt': 'persist', 'variants': ['baseline']})
+                    result = self.wait_run(run_id)
+                self.assertEqual(result['status'], 'failed')
+                self.assertEqual(result['phase'], 'failed')
+                self.assertTrue(result['cleanup_confirmed'])
+                self.assertEqual(result['variants'][0]['status'], 'failed' if target != 'top-run' else 'completed')
+                self.assertIsNone(self.manager.server)
+                self.assertIsNone(self.manager.active)
+                self.assertFalse(self.manager.info()['busy'])
+                self.assertEqual(FakeServer.live, 0)
+                self.assertNotIn('evidence-secret', json.dumps(result))
+                recovery = self.manager.submit({'prompt': 'recovery', 'variants': ['baseline']})
+                self.assertEqual(self.wait_run(recovery)['status'], 'completed')
+
+    def test_active_reservation_is_held_until_cleanup_confirmed(self):
+        entered, release = threading.Event(), threading.Event()
+        original_stop = FakeServer.stop
+        def gated_stop(server):
+            entered.set()
+            if not release.wait(2):
+                raise RuntimeError('test cleanup gate timed out')
+            original_stop(server)
+        with patch.object(FakeServer, 'stop', gated_stop):
+            run_id = self.manager.submit({'prompt': 'wait for cleanup', 'variants': ['baseline']})
+            try:
+                self.assertTrue(entered.wait(2))
+                self.assertEqual(self.manager.get(run_id)['phase'], 'cleaning_up')
+                self.assertEqual(self.manager.get(run_id)['status'], 'running')
+                self.assertIsNotNone(self.manager.server)
+                self.assertEqual(self.manager.active, run_id)
+                with self.assertRaises(BlockingIOError):
+                    self.manager.submit({'prompt': 'too early'})
+            finally:
+                release.set()
+            self.assertEqual(self.wait_run(run_id)['status'], 'completed')
+        self.assertIsNone(self.manager.active)
+        self.assertIsNone(self.manager.server)
+
+    def test_manifest_write_failures_never_reserve_gpu(self):
+        for error_code in [errno.ENOSPC, errno.EACCES]:
+            with self.subTest(error_code=error_code), patch.object(demo, 'write_json_new', side_effect=OSError(error_code, '/private/manifest-secret')):
+                with self.assertRaises(OSError):
+                    self.manager.submit({'prompt': 'manifest failure'})
+            self.assertIsNone(self.manager.active)
+            self.assertIsNone(self.manager.server)
+            self.assertFalse(self.manager.jobs)
+            self.assertFalse(FakeServer.instances)
+
+    def test_cancel_reaps_real_owned_process_group(self):
+        from inference_lab.runtime import LocalServer, RuntimeFailure
+        binary = Path(self.temp.name) / 'owned-server'
+        binary.write_text('#!/usr/bin/env python3\nimport subprocess,sys,time\nsubprocess.Popen([sys.executable,"-c","import time; time.sleep(30)"])\nprint("ready",flush=True)\ntime.sleep(30)\n')
+        binary.chmod(0o700)
+        self.manager.binary = binary
+        started = threading.Event()
+        instances = []
+        class RealServer(LocalServer):
+            def __init__(server, *args):
+                super().__init__(*args)
+                instances.append(server)
+            def offload_evidence(server):
+                return {'gpu_layers_observed': server.config['gpu_layers']}
+            def chat(server, prompt, **kwargs):
+                deadline = time.monotonic() + 2
+                while 'ready' not in (server.run_dir / 'server.log').read_text():
+                    if time.monotonic() >= deadline:
+                        raise RuntimeFailure('owned child did not start')
+                    time.sleep(.01)
+                started.set()
+                server.process.wait(timeout=5)
+                raise RuntimeFailure('owned process stopped')
+        with patch.object(demo, 'LocalServer', RealServer), patch('inference_lab.runtime.free_loopback_port', return_value=18441), patch('inference_lab.runtime.http_json', return_value={'status': 'ok'}):
+            run_id = self.manager.submit({'prompt': 'cancel owned child'})
+            self.assertTrue(started.wait(2))
+            self.manager.cancel(run_id)
+            result = self.wait_run(run_id)
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertTrue(result['cleanup_confirmed'])
+        self.assertEqual(result['variants'][0]['status'], 'cancelled')
+        self.assertEqual(result['variants'][1]['status'], 'cancelled')
+        self.assertTrue(instances[0].cleanup_confirmed)
+        self.assertIsNotNone(instances[0].process.poll())
+        self.assertFalse(LocalServer.group_has_live_members(instances[0].process.pid))
+        self.assertIsNone(self.manager.active)
+        self.assertIsNone(self.manager.server)
+
+    def test_cleanup_failure_retains_ownership_even_when_evidence_fails(self):
+        def failed_stop(server):
+            raise RuntimeError('/private/cleanup-secret')
+        original_write = demo.write_json_new
+        def failed_receipt(path, value):
+            if path.name in {'raw-response.json', 'run.json'}:
+                raise OSError('/private/write-secret')
+            original_write(path, value)
+        with patch.object(FakeServer, 'stop', failed_stop), patch.object(demo, 'write_json_new', side_effect=failed_receipt):
+            run_id = self.manager.submit({'prompt': 'retain ownership'})
+            result = self.wait_run(run_id)
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['cleanup_confirmed'])
+        self.assertEqual(result['variants'][0]['status'], 'failed')
+        self.assertIs(self.manager.server, FakeServer.instances[0])
+        self.assertEqual(self.manager.active, run_id)
+        self.assertTrue(self.manager.info()['busy'])
+        self.assertFalse(self.manager.info()['ready'])
+        with self.assertRaises(RuntimeError):
+            self.manager.submit({'prompt': 'must stay blocked'})
+        self.assertNotIn('secret', json.dumps(result))
+        # Test teardown owns the fake process after the failure has been inspected.
+        self.manager.server.stop()
 
     def test_identity_is_cached_once_and_failure_blocks_submission(self):
         self.manager.status = 'checking'

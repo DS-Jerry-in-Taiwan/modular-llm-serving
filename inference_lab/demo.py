@@ -123,10 +123,10 @@ class DemoManager:
         if not isinstance(variants, list) or not variants or any(type(v) is not str or v not in self.configs for v in variants) or len(set(variants)) != len(variants):
             raise ValueError("Select baseline and/or optimized once each.")
         with self.lock:
-            if self.active is not None:
-                raise BlockingIOError("GPU is busy with another run.")
             if self.status != "ready" or self.closing:
                 raise RuntimeError("Model verification is not ready.")
+            if self.active is not None:
+                raise BlockingIOError("GPU is busy with another run.")
             job_id = uuid.uuid4().hex
             directory = self.output_root / job_id
             directory.mkdir(parents=True, exist_ok=False)
@@ -241,34 +241,50 @@ class DemoManager:
                                 self._update(item, gpu_peak_bytes=peak["sampled_peak_bytes"], gpu_peak_scope="Whole device including other processes; sampled maximum")
                     except Exception as exc:
                         failure = exc
+                    # Evidence failures must not bypass terminal state or ownership cleanup.
                     if server.last_response is not None:
-                        write_json_new(variant_dir / "raw-response.json", server.last_response)
+                        try:
+                            write_json_new(variant_dir / "raw-response.json", server.last_response)
+                        except Exception as exc:
+                            failure = exc
                     with self.lock:
-                        self.server = None
+                        if evidence["cleanup_confirmed"]:
+                            self.server = None
+                    self._update(item, cleanup_confirmed=evidence["cleanup_confirmed"])
                     if failure:
                         self._update(item, status="cancelled" if isinstance(failure, RunCancelled) else "failed", error=safe_error(failure))
                         evidence["error"] = {"type": type(failure).__name__, "message": safe_error(failure)}
                     else:
                         self._update(item, status="completed")
                     evidence["variant"] = copy.deepcopy(item)
-                    write_json_new(variant_dir / "run.json", evidence)
+                    try:
+                        write_json_new(variant_dir / "run.json", evidence)
+                    except Exception as exc:
+                        failure = exc
+                        self._update(item, status="failed", error=safe_error(exc))
                 if failure:
                     raise failure
             self._update(job, status="completed", phase="completed")
         except Exception as exc:
-            self._update(job, status="cancelled" if cancel.is_set() or isinstance(exc, RunCancelled) else "failed",
-                         phase="cancelled" if cancel.is_set() or isinstance(exc, RunCancelled) else "failed", error=safe_error(exc))
+            self._update(job, status="cancelled" if isinstance(exc, RunCancelled) else "failed",
+                         phase="cancelled" if isinstance(exc, RunCancelled) else "failed", error=safe_error(exc))
             for item in job["variants"]:
                 if item["status"] == "queued":
                     self._update(item, status="cancelled", error="Not started because the run stopped.")
         finally:
-            self._update(job, current_variant=None, finished_at=now())
+            # A failed writer must never leave a published variant in an active phase.
+            for item in job["variants"]:
+                if item["status"] in {"loading", "running"}:
+                    self._update(item, status="failed", error=job.get("error", "Local inference failed; inspect local evidence."))
+            self._update(job, current_variant=None, finished_at=now(), cleanup_confirmed=self.server is None)
             try:
                 write_json_new(directory / "run.json", self.get(job_id))
             except Exception:
                 self._update(job, status="failed", phase="failed", error="Failed to persist local run evidence.")
             with self.lock:
-                self.active = None
+                # Retain the owned server and active reservation when stop was not confirmed.
+                if self.server is None:
+                    self.active = None
 
     def shutdown(self):
         with self.lock:
