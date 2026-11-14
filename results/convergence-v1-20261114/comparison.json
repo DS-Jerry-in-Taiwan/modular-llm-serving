@@ -1,0 +1,308 @@
+{
+  "schema_version": 1,
+  "kind": "single_factor_comparison",
+  "created_at_utc": "2026-11-14T13:30:14.557084+00:00",
+  "baseline_run_id": "20261114T131732Z-1327935c51",
+  "candidate_run_id": "20261114T132436Z-34b235865f",
+  "baseline_evidence": {
+    "run_sha256": "3e0062f5eb231cd70c08f1838ec2230c958509c296bf3c6f60cd943e1b61184e",
+    "review_sha256": "fefe8d88cde75e948ce2fed7987b7767870f6f42074f45e80d6c4ac2855d00b5",
+    "manifest_sha256": "439d028fe360b52499910bc270d52eceba553747d436b02f344241e6598bd5cf"
+  },
+  "candidate_evidence": {
+    "run_sha256": "fc0b0a40894d925c2184306b7da867adcd746fb97cb950c36cc15f64f4170b99",
+    "review_sha256": "364f457bfd1157253b8cafc1104e034a1b7634b8fdbebbd148ad42a7fe99ae43",
+    "manifest_sha256": "51e563d727426b980bfd048f879138d76f8862a14744f30068719f83f8c02c8f"
+  },
+  "evidence_locations": {
+    "baseline": "docs/agent_context/inference-lab/convergence/runs/20261114T131732Z-1327935c51",
+    "candidate": "docs/agent_context/inference-lab/convergence/runs/20261114T132436Z-34b235865f"
+  },
+  "experiment_identity": {
+    "model": {
+      "path": "/home/ubuntu/.cache/inference-lab/models/Qwen3.8-27B-Q4_K_M.gguf",
+      "size_bytes": 17442399968,
+      "sha256": "880a52af8317974f7b4b064a6bc29ff49e188b91aa218e08eea3078b6b1cc673"
+    },
+    "runtime": {
+      "binary": "/home/ubuntu/.cache/inference-lab/runtime/llama-fa676981/build/bin/llama-server",
+      "sha256": "b1c085cc4bad3d44145503c0f202c4052d72922e8e35630b518e323a14d87e4e",
+      "version": "version: 0.4.0-dev (build 10896, commit fa6769818708afd9807b22183ccda112fd563427)\nbuilt with GNU 13.3.0 for Linux x86_64",
+      "configured_revision": "fa6769818708afd9807b22183ccda112fd563427",
+      "pin_verified": true
+    },
+    "source": {
+      "files": {
+        "__init__.py": "cb9e15bd630551eedf1b77e6c2096b0a4e4b7d67a6e2071e60fc9f98ef6cbb72",
+        "acquisition.py": "d32508fd66afb24653c3a7ff7c90c109ef268f5ac96ee285d68c421d3bfbacba",
+        "artifacts.py": "25c2c5132d48c87c33fb5234379292c84e4aab89a8e8bc6672bed1653f240de6",
+        "config.py": "b4c6934e85d71077d9b947562e47e37b1088260c0eb4763e2d838cbdf56d6ea8",
+        "evaluation/__init__.py": "6bdb6caefbbb78a790b1e129cef98978a8090bd62254379e88e18acbaba72b44",
+        "evaluation/baseline.py": "d5cd44efd5aae0297c07893fc6e38bb06e0b6277f79e7611120ce7de69791fa4",
+        "evaluation/tasks.py": "8227169064b31705627d3f1a7212a18231d62210cfe7ec80757125291c11521d",
+        "runtime.py": "b2b24dde8f02c3db9fd324156bdefb03f7e094eb40afe3a297550c9b540db4d8",
+        "telemetry.py": "87a94182e5da6408727e7348f1c7dce5fea121108d4b37edaf51a3929d664de8"
+      },
+      "sha256": "799021a7634ec65dd81ece0323caea9199fc4b02f3124fce21cf8a645f898ccc",
+      "git_commit": {
+        "status": "ok",
+        "returncode": 0,
+        "output": "2d1ccd0f483b67efcb78cd795efbcc242f30d438"
+      },
+      "git_status": {
+        "status": "ok",
+        "returncode": 0,
+        "output": "M AGENTS.md\n M INFERENCE_LAB.md\n?? ARCHITECTURE.md\n?? README.md"
+      }
+    },
+    "dataset_id": "local-text-usefulness-v1",
+    "dataset_sha256": "83a8b4216552d57aadb3c29c13c9091a1c72fb78bbbef8fd0173ffec28d5ded2",
+    "hardware": {
+      "hostname": "llm-server",
+      "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.39",
+      "gpu_name": "NVIDIA GeForce RTX 3080",
+      "gpu_total_bytes": 12884901888,
+      "gpu_count": 1,
+      "cpu": [
+        "Architecture:                            x86_64",
+        "CPU(s):                                  20",
+        "Model name:                              13th Gen Intel(R) Core(TM) i5-13600K",
+        "Thread(s) per core:                      2",
+        "Core(s) per socket:                      14",
+        "Socket(s):                               1"
+      ]
+    }
+  },
+  "hypothesis": "More GPU layers reduce CPU offload work at the cost of higher VRAM consumption.",
+  "declared_changes": {
+    "runtime.gpu_layers": {
+      "baseline": 24,
+      "candidate": 40
+    }
+  },
+  "quality": {
+    "baseline": "pass",
+    "candidate": "pass",
+    "scope": "six fixed fixtures, two repeats, independent AI rubric reviews plus strict JSON checks"
+  },
+  "per_case": {
+    "summary-pilot": {
+      "baseline_request_seconds": 18.9331436464563,
+      "candidate_request_seconds": 10.130642927542794,
+      "latency_ratio": 1.8688985271587861,
+      "latency_reduction_percent": 46.49254705549685,
+      "baseline_range_seconds": [
+        18.672506715985946,
+        19.193780576926656
+      ],
+      "candidate_range_seconds": [
+        10.001928625046276,
+        10.259357230039313
+      ],
+      "baseline_output_tokens": [
+        39,
+        39
+      ],
+      "candidate_output_tokens": [
+        39,
+        39
+      ],
+      "outputs_identical_by_repeat": true,
+      "baseline_generated_tokens_per_second": 2.277933421844674,
+      "candidate_generated_tokens_per_second": 4.295565711151292
+    },
+    "summary-incident": {
+      "baseline_request_seconds": 16.894924375519622,
+      "candidate_request_seconds": 10.034968568012118,
+      "latency_ratio": 1.683605111567024,
+      "latency_reduction_percent": 40.603649090299754,
+      "baseline_range_seconds": [
+        16.831995869986713,
+        16.95785288105253
+      ],
+      "candidate_range_seconds": [
+        9.987908223993145,
+        10.082028912031092
+      ],
+      "baseline_output_tokens": [
+        38,
+        38
+      ],
+      "candidate_output_tokens": [
+        38,
+        38
+      ],
+      "outputs_identical_by_repeat": true,
+      "baseline_generated_tokens_per_second": 2.4982077644763816,
+      "candidate_generated_tokens_per_second": 4.275309709900609
+    },
+    "json-person": {
+      "baseline_request_seconds": 13.579532602976542,
+      "candidate_request_seconds": 7.4828377814847045,
+      "latency_ratio": 1.8147570479981947,
+      "latency_reduction_percent": 44.89620519159462,
+      "baseline_range_seconds": [
+        13.07673878397327,
+        14.082326421979815
+      ],
+      "candidate_range_seconds": [
+        7.294895616942085,
+        7.670779946027324
+      ],
+      "baseline_output_tokens": [
+        27,
+        27
+      ],
+      "candidate_output_tokens": [
+        27,
+        27
+      ],
+      "outputs_identical_by_repeat": true,
+      "baseline_generated_tokens_per_second": 2.275984159084612,
+      "candidate_generated_tokens_per_second": 4.332721258934946
+    },
+    "json-orders": {
+      "baseline_request_seconds": 14.261035645497032,
+      "candidate_request_seconds": 9.103561525524128,
+      "latency_ratio": 1.5665336698733374,
+      "latency_reduction_percent": 36.16479369505954,
+      "baseline_range_seconds": [
+        13.869899272918701,
+        14.652172018075362
+      ],
+      "candidate_range_seconds": [
+        8.661326972069219,
+        9.545796078979038
+      ],
+      "baseline_output_tokens": [
+        34,
+        34
+      ],
+      "candidate_output_tokens": [
+        34,
+        34
+      ],
+      "outputs_identical_by_repeat": true,
+      "baseline_generated_tokens_per_second": 2.676228473204625,
+      "candidate_generated_tokens_per_second": 4.309079825387553
+    },
+    "code-default-list": {
+      "baseline_request_seconds": 50.576199321541935,
+      "candidate_request_seconds": 34.60378149244934,
+      "latency_ratio": 1.4615801262234251,
+      "latency_reduction_percent": 31.580897820231137,
+      "baseline_range_seconds": [
+        46.27592764107976,
+        54.87647100200411
+      ],
+      "candidate_range_seconds": [
+        32.88982503092848,
+        36.31773795397021
+      ],
+      "baseline_output_tokens": [
+        138,
+        138
+      ],
+      "candidate_output_tokens": [
+        138,
+        138
+      ],
+      "outputs_identical_by_repeat": true,
+      "baseline_generated_tokens_per_second": 2.8313210286281834,
+      "candidate_generated_tokens_per_second": 4.126515934236259
+    },
+    "code-missing-last": {
+      "baseline_request_seconds": 57.29638946149498,
+      "candidate_request_seconds": 37.69297863653628,
+      "latency_ratio": 1.5200812335366054,
+      "latency_reduction_percent": 34.21404212237985,
+      "baseline_range_seconds": [
+        55.78387760696933,
+        58.80890131602064
+      ],
+      "candidate_range_seconds": [
+        36.14407254010439,
+        39.241884732968174
+      ],
+      "baseline_output_tokens": [
+        149,
+        149
+      ],
+      "candidate_output_tokens": [
+        150,
+        150
+      ],
+      "outputs_identical_by_repeat": false,
+      "baseline_generated_tokens_per_second": 2.670052563525982,
+      "candidate_generated_tokens_per_second": 4.127661971472788
+    }
+  },
+  "measured_request_totals_seconds": {
+    "baseline": 343.08245010697283,
+    "candidate": 218.09754186309874,
+    "latency_ratio": 1.5730688533955506
+  },
+  "resources": {
+    "baseline": {
+      "interval_seconds": 0.25,
+      "sample_count": 1240,
+      "scope": {
+        "gpu_device_used_bytes": "whole GPU including other processes; sampled maximum, not continuous peak",
+        "system_memory_used_bytes": "host MemTotal-MemAvailable; includes competing workloads and reclaimable-memory estimate",
+        "server_rss_bytes": "owned server process VmRSS only; not all host RAM or child RSS"
+      },
+      "gpu_device_used_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 7396524032
+      },
+      "system_memory_used_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 21982096384
+      },
+      "server_rss_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 17722429440
+      }
+    },
+    "candidate": {
+      "interval_seconds": 0.25,
+      "sample_count": 769,
+      "scope": {
+        "gpu_device_used_bytes": "whole GPU including other processes; sampled maximum, not continuous peak",
+        "system_memory_used_bytes": "host MemTotal-MemAvailable; includes competing workloads and reclaimable-memory estimate",
+        "server_rss_bytes": "owned server process VmRSS only; not all host RAM or child RSS"
+      },
+      "gpu_device_used_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 11134042112
+      },
+      "system_memory_used_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 22361662464
+      },
+      "server_rss_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 17728630784
+      }
+    }
+  },
+  "environment": {
+    "baseline_load_average": [
+      17.03662109375,
+      10.44580078125,
+      8.28125
+    ],
+    "candidate_load_average": [
+      15.80712890625,
+      13.69677734375,
+      10.82373046875
+    ]
+  },
+  "limitations": [
+    "Two repeats only; no statistical significance or production SLA claim.",
+    "Host load may differ; sequential runs are not randomized.",
+    "Output lengths/content may differ despite fixed prompts and generation settings; inspect per-case token counts.",
+    "GPU/system peaks include competing processes; RSS is owned server only; all peaks sampled.",
+    "New process, warm filesystem cache not controlled; TTFT unavailable from non-stream requests."
+  ]
+}
