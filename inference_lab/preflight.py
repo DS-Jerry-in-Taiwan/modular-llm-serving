@@ -46,6 +46,11 @@ def load_config(path):
         raise ValueError("model exceeds download budget")
     if not re.fullmatch(r"[0-9a-f]{40}", config["runtime"].get("revision", "")):
         raise ValueError("runtime revision must be immutable")
+    for key in ("context_size", "gpu_layers", "threads", "parallel"):
+        if type(config["runtime"].get(key)) is not int or config["runtime"][key] <= 0:
+            raise ValueError(f"runtime.{key} must be a positive integer")
+    if config["runtime"]["parallel"] != 1:
+        raise ValueError("only one inference slot is supported")
     return config
 
 

@@ -49,3 +49,36 @@ The official Qwen model and chosen quantized artifact were verified via the real
 ```sh
 PYTHONDONTWRITEBYTECODE=1 venv/bin/python -m unittest discover -s tests -v
 ```
+
+## T2: acquire and smoke
+
+Acquire the pinned artifact outside Git (existing complete files are fully re-verified; partial files are never silently resumed or overwritten):
+
+```sh
+venv/bin/python -m inference_lab acquire-model \
+  --config experiments/qwen38-27b-q4.json \
+  --destination /home/ubuntu/.cache/inference-lab/models/Qwen3.8-27B-Q4_K_M.gguf
+```
+
+Run one local-only, ticket-owned service, ask a short non-thinking smoke prompt, then stop it on success or failure:
+
+```sh
+LD_LIBRARY_PATH=/home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu \
+venv/bin/python -m inference_lab smoke \
+  --config experiments/qwen38-27b-q4.json \
+  --binary /home/ubuntu/.cache/inference-lab/runtime/llama-fa676981/build/bin/llama-server \
+  --model /home/ubuntu/.cache/inference-lab/models/Qwen3.8-27B-Q4_K_M.gguf \
+  --output-root docs/agent_context/inference-lab/runs
+```
+
+The host needs actual GPU device access. The CLI never reads root `.env` or uses Modal authentication. Each unique run directory retains `run.json` and `server.log`; failed runs remain failed, cancellation is recorded after cleanup. Exact model checksum and runtime commit/version are checked before startup. An observed positive GPU offload count and valid NVML evidence are required; CPU-only output cannot pass. HTTP wall deadlines and an overall watchdog bound GPU activity. The process group belongs only to this invocation and is stopped at completion, including TERM-ignoring children. Original deployment source, pinned submodule and unrelated workloads are not changed.
+
+The smoke asks for at most 64 generated tokens, marks truncation explicitly, and rejects an empty or truncated answer. This verifies the inference path, not summary/code quality or performance acceptance. Later task suites evaluate real usefulness.
+
+### Verified first GPU smoke (2026-11-14)
+
+Run `20261114T052455Z-995842ddd5` used the pinned Q4_K_M artifact and build10896/fa676981 runtime on the real RTX 3080. The server reported **24/66 layers offloaded**, a 5906.28 MiB GPU model buffer and ~6247 MiB total owned GPU buffers. NVML sampled ~7.40 GB device-wide used memory during the request (including other GPU allocations). The exact answer was `inference ok`, with `finish_reason=stop`, 4 generated tokens, 4.42 seconds request time and 5.03 seconds readiness time. The owned server was stopped and cleanup confirmed. This tiny, cache-warm smoke is not a workload baseline or a general speed estimate.
+
+Two earlier failed attempts remain in the evidence history: one exposed the need to retry `/health` loading HTTP 503 within the deadline; another lacked offload evidence because the pinned runtime maps loader INFO to trace verbosity4. The harness now retries only known readiness503 and explicitly sets log verbosity4. Missing evidence was treated as failure, not presented as proof that hardware was CPU-only.
+
+Local evidence is retained under ignored `docs/agent_context/inference-lab/`: model acquisition checksum receipt and per-run JSON/log files. No credentials are included; model/runtime caches live outside the checkout.
