@@ -328,7 +328,83 @@ class DemoTests(unittest.TestCase):
                 self.assertEqual(response.headers['Cache-Control'], 'no-store')
         with urllib.request.urlopen(url + '/reference', timeout=2) as response:
             self.assertEqual(response.status, 200)
-            self.assertIn(b'Historical controlled benchmark', response.read())
+            body = response.read().decode('utf-8')
+            self.assertIn('收斂後 V1 固定測試', body)
+            self.assertIn('20261114T131732Z-1327935c51', body)
+            self.assertIn('343.08s', body)
+
+    def test_reference_api_projects_latest_comparison_without_local_paths(self):
+        source = json.loads((web_server.ROOT / web_server.REFERENCE_DIRECTORY / 'comparison.json').read_text())
+        server = web_server.DemoHTTPServer(('127.0.0.1', 0), web_server.handler_for(self.manager))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f'http://127.0.0.1:{server.server_port}/api/reference'
+        with urllib.request.urlopen(url, timeout=2) as response:
+            self.assertEqual(response.status, 200)
+            data = json.load(response)
+        self.assertEqual(data['status'], 'available')
+        self.assertEqual(data['label'], '收斂後 V1 固定測試')
+        self.assertEqual(data['baseline_run_id'], source['baseline_run_id'])
+        self.assertEqual(data['candidate_run_id'], source['candidate_run_id'])
+        self.assertEqual(data['measured_request_totals_seconds'], source['measured_request_totals_seconds'])
+        self.assertEqual(data['quality']['samples_per_configuration'], 12)
+        self.assertEqual(data['reference_url'], '/reference')
+        for case in data['cases']:
+            self.assertEqual(case['baseline_seconds'], source['per_case'][case['id']]['baseline_request_seconds'])
+            self.assertEqual(case['candidate_seconds'], source['per_case'][case['id']]['candidate_request_seconds'])
+            self.assertEqual(case['latency_ratio'], source['per_case'][case['id']]['latency_ratio'])
+        for key in ('baseline', 'candidate'):
+            self.assertEqual(data['gpu_peak_bytes'][key], source['resources'][key]['gpu_device_used_bytes']['sampled_peak_bytes'])
+        public = json.dumps(data)
+        for private in ('/home/', 'evidence_locations', 'binary', 'source', 'git_status', 'docs/agent_context'):
+            self.assertNotIn(private, public)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(urllib.request.Request(url, headers={'Host': 'evil.example'}), timeout=2)
+        self.assertEqual(error.exception.code, 403)
+
+    def test_reference_unavailable_for_invalid_or_missing_evidence(self):
+        source = json.loads((web_server.ROOT / web_server.REFERENCE_DIRECTORY / 'comparison.json').read_text())
+        root = Path(self.temp.name) / 'reference-root'
+        directory = root / web_server.REFERENCE_DIRECTORY
+        directory.mkdir(parents=True)
+        report, comparison = directory / 'report.md', directory / 'comparison.json'
+        variants = [None, [], {}, {**source, 'quality': {'baseline': 'pending', 'candidate': 'pass'}},
+                    {**source, 'measured_request_totals_seconds': {'baseline': float('nan'), 'candidate': 1, 'latency_ratio': 1}},
+                    {**source, 'baseline_run_id': '/private/evidence-secret'}]
+        with patch.object(web_server, 'ROOT', root):
+            self.assertEqual(web_server.reference_info()['status'], 'unavailable')
+            report.write_text('Fixed report')
+            for value in variants:
+                with self.subTest(value=type(value).__name__):
+                    comparison.write_text(json.dumps(value))
+                    result = web_server.reference_info()
+                    self.assertEqual(set(result), {'status', 'label', 'scope', 'reference_url'})
+                    self.assertEqual(result['status'], 'unavailable')
+            for invalid in ['{malformed', '[' * 2000, 'x' * (web_server.REFERENCE_MAX_BYTES + 1)]:
+                comparison.write_text(invalid)
+                self.assertEqual(web_server.reference_info()['status'], 'unavailable')
+            comparison.write_text(json.dumps(source))
+            self.assertEqual(web_server.reference_info()['status'], 'available')
+            for content in [b'', b'\xff', b'x' * (web_server.REFERENCE_MAX_BYTES + 1)]:
+                report.write_bytes(content)
+                self.assertEqual(web_server.reference_info()['status'], 'unavailable')
+            report.write_text('<script>alert("escaped")</script>')
+            server = web_server.DemoHTTPServer(('127.0.0.1', 0), web_server.handler_for(self.manager))
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                url = f'http://127.0.0.1:{server.server_port}'
+                with urllib.request.urlopen(url + '/reference', timeout=2) as response:
+                    text = response.read().decode()
+                    self.assertNotIn('<script>', text)
+                    self.assertIn('&lt;script&gt;', text)
+                comparison.write_text('{malformed')
+                with urllib.request.urlopen(url + '/api/reference', timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(json.load(response)['status'], 'unavailable')
+            finally:
+                server.shutdown()
+                server.server_close()
 
     def test_http_security_and_contract(self):
         server = web_server.DemoHTTPServer(('127.0.0.1', 0), web_server.handler_for(self.manager, self.temp.name))

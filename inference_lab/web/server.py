@@ -5,6 +5,7 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import html
+import math
 from pathlib import Path
 import re
 import signal
@@ -15,6 +16,75 @@ from ..config import load_config
 from .jobs import DemoManager
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+REFERENCE_DIRECTORY = Path("results/convergence-v1-20261114")
+REFERENCE_MAX_BYTES = 2 * 1024 * 1024
+REFERENCE_LABEL = "收斂後 V1 固定測試"
+REFERENCE_SCOPE = "六個固定文字案例，每種設定各執行兩次；與即時自訂提示分開。"
+REFERENCE_CASES = {
+    "summary-pilot": "試用摘要", "summary-incident": "事件摘要",
+    "json-person": "人物 JSON 擷取", "json-orders": "訂單 JSON 擷取",
+    "code-default-list": "Python 預設串列", "code-missing-last": "Python 邊界修正",
+}
+
+
+def reference_text(filename):
+    """Read only a fixed local result, with a hard size bound."""
+    if filename not in {"report.md", "comparison.json"}:
+        raise ValueError("unknown reference artifact")
+    with (ROOT / REFERENCE_DIRECTORY / filename).open("rb") as handle:
+        raw = handle.read(REFERENCE_MAX_BYTES + 1)
+    if not raw or len(raw) > REFERENCE_MAX_BYTES:
+        raise ValueError("reference artifact missing or oversized")
+    return raw.decode("utf-8")
+
+
+def reference_info():
+    """Project public benchmark fields without exposing local evidence paths."""
+    unavailable = {"status": "unavailable", "label": REFERENCE_LABEL,
+                   "scope": REFERENCE_SCOPE, "reference_url": "/reference"}
+    try:
+        if not reference_text("report.md").strip():
+            raise ValueError("empty reference report")
+        comparison = json.loads(reference_text("comparison.json"))
+        if comparison["schema_version"] != 1 or comparison["kind"] != "single_factor_comparison":
+            raise ValueError("invalid reference schema")
+        def positive(value):
+            if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
+                raise ValueError("invalid reference metric")
+            return value
+        run_ids = {key: comparison[key] for key in ("baseline_run_id", "candidate_run_id")}
+        if any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value) for value in run_ids.values()):
+            raise ValueError("invalid reference identity")
+        totals = {key: positive(comparison["measured_request_totals_seconds"][key]) for key in ("baseline", "candidate", "latency_ratio")}
+        peaks = {key: positive(comparison["resources"][key]["gpu_device_used_bytes"]["sampled_peak_bytes"]) for key in ("baseline", "candidate")}
+        if any(comparison["resources"][key]["gpu_device_used_bytes"]["status"] != "ok" for key in peaks):
+            raise ValueError("unavailable resource metric")
+        if any(comparison["quality"][key] != "pass" for key in ("baseline", "candidate")):
+            raise ValueError("reference quality not accepted")
+        if set(comparison["per_case"]) != set(REFERENCE_CASES):
+            raise ValueError("incomplete reference cases")
+        cases = []
+        for case_id, label in REFERENCE_CASES.items():
+            case = comparison["per_case"][case_id]
+            for key in ("baseline_output_tokens", "candidate_output_tokens"):
+                if len(case[key]) != 2 or any(type(value) is not int or value <= 0 for value in case[key]):
+                    raise ValueError("invalid reference repeat coverage")
+            cases.append({"id": case_id, "label": label,
+                          "baseline_seconds": positive(case["baseline_request_seconds"]),
+                          "candidate_seconds": positive(case["candidate_request_seconds"]),
+                          "latency_ratio": positive(case["latency_ratio"])})
+        return {**unavailable, "status": "available", **run_ids,
+                "measured_request_totals_seconds": totals, "gpu_peak_bytes": peaks, "cases": cases,
+                "quality": {"baseline": "pass", "candidate": "pass", "samples_per_configuration": len(cases) * 2,
+                            "review": "獨立 AI 審閱＋嚴格 JSON 比對"},
+                "limitations": ["僅六個短文字案例、各重複兩次，不能代表所有任務。",
+                                "依序測試，主機負載與檔案快取可能不同。",
+                                "GPU 記憶體為全裝置取樣峰值，可能包含其他程序。",
+                                "非串流請求，未量測首字延遲；即時測試不自動判定品質。"]}
+    except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError):
+        return unavailable
 
 
 def loopback_authority(value):
@@ -71,16 +141,22 @@ def handler_for(manager, static_root=None):
             path = urlsplit(self.path).path
             if path == "/api/info":
                 return self.send_data(200, manager.info())
+            if path == "/api/reference":
+                return self.send_data(200, reference_info())
             if path == "/api/history":
                 return self.send_data(200, manager.history())
             if path.startswith("/api/runs/"):
                 job = manager.get(path.removeprefix("/api/runs/"))
                 return self.send_data(200 if job else 404, job or {"error": "Run not found."})
             if path == "/reference":
-                report = ROOT / "results/qwen38-rtx3080-20261114-v2/report.md"
-                if report.is_file():
-                    document = "<!doctype html><meta charset=utf-8><title>Recorded inference comparison</title><style>body{max-width:1100px;margin:40px auto;padding:20px;font:16px system-ui}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h1>Recorded comparison</h1><p>Historical controlled benchmark; live user prompts are not automatically quality assessed.</p><pre>" + html.escape(report.read_text()) + "</pre>"
-                    return self.send_data(200, document.encode(), "text/html; charset=utf-8")
+                try:
+                    report = reference_text("report.md")
+                    if not report.strip():
+                        raise ValueError("empty report")
+                except (OSError, ValueError):
+                    report = "固定測試報告暫時無法讀取，請稍後再試。"
+                document = "<!doctype html><html lang=zh-Hant><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>收斂後 V1 固定測試</title><style>body{max-width:1100px;margin:40px auto;padding:20px;font:16px system-ui}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h1>收斂後 V1 固定測試</h1><p>六個固定文字案例、每種設定各測兩次；即時自訂提示不自動判定品質。</p><pre>" + html.escape(report) + "</pre></html>"
+                return self.send_data(200, document.encode(), "text/html; charset=utf-8")
             allowed = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
                        "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8")}
             if path in allowed:

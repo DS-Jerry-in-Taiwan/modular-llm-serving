@@ -30,9 +30,10 @@
   function renderInfo() {
     const ready=info?.ready, busy=info?.busy;
     $('connectionDot').className=`status-dot ${ready ? '' : info?.error ? 'error' : 'checking'}`;
-    $('connectionTitle').textContent=ready ? busy ? '本機正在執行測試' : '模型已就緒' : info?.error ? '環境尚未就緒' : '正在檢查本機模型';
-    $('connectionDetail').textContent=info?.error || (ready ? busy ? '一次執行一組測試，請稍候。' : '已驗證模型，可以開始測試。' : info?.status || '驗證模型檔案與執行環境…');
+    $('connectionTitle').textContent=ready ? busy ? '本機正在執行測試' : '環境已驗證' : info?.error ? '環境尚未就緒' : '正在驗證執行環境';
+    $('connectionDetail').textContent=info?.error || (ready ? busy ? '一次執行一組測試，請稍候。' : '開始測試時載入模型。' : info?.status || '驗證模型檔案與執行環境…');
     if(info?.model) $('modelName').textContent=info.model;
+    if(Number.isInteger(info?.context_size) && info.context_size>0) $('contextSize').textContent=info.context_size.toLocaleString('zh-TW');
     updateControls();
   }
   async function refreshInfo() {
@@ -163,6 +164,35 @@
     if(item.max_tokens) $('maxTokens').value=String(item.max_tokens);
     renderJob();await pollJob(item.id);$('comparison').parentElement.scrollIntoView({behavior:'smooth',block:'start'});
   }
+  async function loadReference() {
+    const box=$('referenceData');
+    try {
+      const data=await api('/api/reference');
+      if(data.label) $('referenceTitle').textContent=data.label;
+      if(data.scope) $('referenceScope').textContent=data.scope;
+      box.replaceChildren();
+      if(data.status!=='available') {box.append(make('p','reference-empty','目前沒有可用的 V1 固定測試基準。你仍可在上方執行即時測試。'));return;}
+      const totals=data.measured_request_totals_seconds || {}, gpu=data.gpu_peak_bytes || {};
+      const summary=make('div','reference-metrics');
+      const total=make('div','reference-stat');total.append(make('span','',`${Number.isFinite(data.quality?.samples_per_configuration)?data.quality.samples_per_configuration+' 次':''}請求時間合計（不含載入）`),make('strong','',`A ${fmt(totals.baseline)} s → B ${fmt(totals.candidate)} s`));
+      const ratio=make('div','reference-stat');ratio.append(make('span','','A/B 請求時間比'),make('strong','',`${fmt(totals.latency_ratio)}×`));
+      const memory=make('div','reference-stat');memory.append(make('span','','整張 GPU 記憶體峰值'),make('strong','',`A ${Number.isFinite(gpu.baseline)?(gpu.baseline/1e9).toFixed(2):'—'} / B ${Number.isFinite(gpu.candidate)?(gpu.candidate/1e9).toFixed(2):'—'} GB`));
+      summary.append(total,ratio,memory);box.append(summary);
+      if(Array.isArray(data.cases) && data.cases.length) {
+        const wrap=make('div','reference-table-wrap'),table=make('table','reference-table'),caption=make('caption','','六個固定案例 · 每案兩次請求的平均時間');table.append(caption);
+        const head=make('thead'),header=make('tr');
+        ['固定案例','A 基準（秒）','B 最佳化（秒）','A/B 時間比'].forEach(label=>{const th=make('th','',label);th.scope='col';header.append(th);});head.append(header);table.append(head);
+        const body=make('tbody');
+        data.cases.forEach(item=>{const row=make('tr'),name=make('th','',item.label || item.id);name.scope='row';row.append(name,make('td','',fmt(item.baseline_seconds)),make('td','',fmt(item.candidate_seconds)),make('td','',`${fmt(item.latency_ratio)}×`));body.append(row);});
+        table.append(body);wrap.append(table);box.append(wrap);
+      }
+      const quality=data.quality || {}, qualityNote=make('p','reference-quality');
+      const passed=quality.baseline==='pass' && quality.candidate==='pass';
+      qualityNote.append(make('span',`badge ${passed?'completed':''}`,passed?'固定樣本品質檢查通過':'品質檢查狀態未確認'),document.createTextNode(` ${quality.review || '請查看報告中的品質審閱紀錄'}${Number.isFinite(quality.samples_per_configuration)?` · 每種配置 ${quality.samples_per_configuration} 個樣本`:''}。此結果不適用於上方的自訂回答。`));box.append(qualityNote);
+      if(Array.isArray(data.limitations) && data.limitations.length) {const list=make('ul','reference-limitations');data.limitations.forEach(item=>list.append(make('li','',item)));box.append(list);}
+      const ids=make('p','reference-ids');ids.append(make('span','',`A 紀錄：${data.baseline_run_id || '—'}`),make('span','',`B 紀錄：${data.candidate_run_id || '—'}`));box.append(ids);
+    } catch {box.replaceChildren(make('p','reference-empty','暫時無法載入固定測試基準。即時測試仍可使用；完整資料請查看固定測試報告。'));}
+  }
   $('run').addEventListener('click',run);$('cancel').addEventListener('click',cancel);
   $('prompt').addEventListener('input',()=>{activeExample='custom';selectTab();updateControls();});
   $('maxTokens').addEventListener('change',updateControls);
@@ -180,5 +210,5 @@
     try {const input=JSON.parse(storage.get('qwen-lab-input') || 'null');if(input) {$('prompt').value=input.prompt || ''; $('maxTokens').value=String(input.max_tokens || 192);}} catch {}
     job={id:remembered,status:'queued',variants:[]};renderJob();pollJob(remembered);
   }
-  refreshInfo();refreshHistory();
+  refreshInfo();refreshHistory();loadReference();
 })();
