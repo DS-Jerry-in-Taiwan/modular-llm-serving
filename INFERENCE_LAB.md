@@ -105,3 +105,21 @@ Host load and competing workloads can affect timing. Until repeated baseline mea
 ### Verified first usefulness suite (2026-11-14)
 
 Run `20261114T053113Z-57fe28c22d` completed all six real GPU cases in183.06 seconds, with no truncated responses and cleanup confirmed. Both JSON extractions passed exact typed-value checks. An independent AI acceptor reviewed the four summary/code responses against every rubric item, bound that review to the exact run/dataset/output hashes, and independently executed the proposed Python repair. All six quality outcomes passed for these small fixtures. This is a limited usefulness sample, not a general model capability guarantee or repeated baseline. The review explicitly identifies AI review and does not claim human validation.
+
+## T4: repeated baseline
+
+Use the same suite command arguments with `baseline` instead of `suite`, plus `--repeats 2`. This starts a new owned server, runs one unmeasured warmup, then each of six cases twice in repeat-major dataset order. Every request fixes `cache_prompt=false`; actual engine-reported cached tokens are saved separately. A new process is not a cold filesystem cache, and startup time is labelled accordingly.
+
+A pre-start immutable `manifest.json` captures config/dataset/source identities, exact runtime/model identities, host environment, protocol and baseline ID. Source hashes cover the actual runner/runtime/scorer files even if the working tree has changes; git commit and dirty status remain visible. The original run, manifest, samples and append-only review are never overwritten. `progress.json` is explicitly mutable progress, and `report.md` is a derived view.
+
+GPU device-wide used memory, host `MemTotal-MemAvailable`, and owned server process `VmRSS` are sampled every0.25 seconds, including model load when a process exists. Reported maxima are **sampled peaks**, not continuous maxima, and GPU/system values include unrelated workloads. Missing metrics are unavailable, never zero. Non-stream TTFT is unavailable because first-token arrival was not observed. Request elapsed time and engine token throughput are distinct metrics; actual cached tokens and input/output token counts are retained per sample.
+
+A baseline is measurement-complete only when every planned sample completed without truncation and owned-service cleanup succeeded. Baseline CLI exits nonzero otherwise. It is not quality-eligible until all exact JSON outcomes and independently reviewed summary/code outputs pass for this exact run; prior suite reviews cannot be reused silently. The review sidecar binds run bytes, dataset and each repeated output. Use the same `review` CLI; baseline review input has a `samples` mapping keyed by sample ID instead of `cases`.
+
+Per-case aggregates retain count/mean/median/min/max. Two repeats illustrate observed variation; they do not establish statistical significance or a production SLA. Usability thresholds are determined from the experiments rather than guessed in advance.
+
+### Verified first baseline (2026-11-14)
+
+Baseline `20261114T054137Z-0e00a3ea0c` completed12/12 nontruncated measurements after one warmup, with all observed cached-prompt counts zero and cleanup confirmed. The independent AI acceptor reviewed the exact eight repeated summary/code outputs against the rubric, with per-output and run/dataset hashes; both JSON tasks passed strict checks in both repeats. The baseline is measurement-complete and quality-reviewed eligible through its appended review.
+
+Observed total run308.61 seconds, readiness3.69 seconds. Per-task mean request times: summaries13.99/13.58s, JSON10.27/12.87s, code45.44/49.20s. Engine generation throughput was approximately3.0–3.13 tokens/s for these fixtures. The998 sampled resource observations gave device-wide GPU peak7,403,274,240 bytes and owned-server RSS peak17,728,733,184 bytes. These are scoped measurements on this host with possible competing CPU workloads, not portable performance promises. Raw evidence and independent acceptance receipts remain in the local ignored evidence directory.

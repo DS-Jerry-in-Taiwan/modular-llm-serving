@@ -201,7 +201,7 @@ class LocalServer:
         try:
             response = http_json(self.url + "/v1/chat/completions", {
             "model": "local-qwen", "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens, "temperature": temperature, "seed": seed,
+            "max_tokens": max_tokens, "temperature": temperature, "seed": seed, "cache_prompt": False,
             "chat_template_kwargs": {"enable_thinking": False},
             }, timeout=min(120, self.remaining()))
         except HttpResponseFailure as exc:
@@ -217,7 +217,7 @@ class LocalServer:
         return {"prompt": prompt, "response": response, "content": content,
                 "elapsed_seconds": time.monotonic() - start,
                 "truncated": response["choices"][0].get("finish_reason") == "length",
-                "generation": {"max_tokens": max_tokens, "temperature": temperature, "seed": seed}}
+                "generation": {"max_tokens": max_tokens, "temperature": temperature, "seed": seed, "cache_prompt": False}}
 
     def offload_evidence(self):
         text = (self.run_dir / "server.log").read_text(errors="replace")
