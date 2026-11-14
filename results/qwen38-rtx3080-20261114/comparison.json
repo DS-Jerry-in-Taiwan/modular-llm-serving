@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "kind": "single_factor_comparison",
+  "created_at_utc": "2026-11-14T05:55:13.927762+00:00",
+  "baseline_run_id": "20261114T054137Z-0e00a3ea0c",
+  "candidate_run_id": "20261114T054955Z-b62d4eb4a9",
+  "baseline_evidence": {
+    "run_sha256": "025e05db0b8b41c7ebcd0b13d98565962ad1dfb500029cdd2896b88589f8c135",
+    "review_sha256": "639ba1eb4e88fe207b98ae26712691b044f977214575b543d6a4f60abfc73571",
+    "manifest_sha256": "8f232ecc7ac0178a1b7c7e77c36e32f473122286817e12fdc3ae838b2632ea16"
+  },
+  "candidate_evidence": {
+    "run_sha256": "9190840afbf96eabe3425ddb22563243e786bb8f817ed014b16692592944f326",
+    "review_sha256": "9ade68d739dfe6a87c4a7a48ba27411fa2a152c446f54fa8672a400f8714a61e",
+    "manifest_sha256": "df20e348aa2192b11e424cf8829f58368102fff91fc10d1c36955e5ac21c6764"
+  },
+  "hypothesis": "More GPU layers reduce CPU offload work at the cost of higher VRAM consumption.",
+  "declared_changes": {
+    "runtime.gpu_layers": {
+      "baseline": 24,
+      "candidate": 40
+    }
+  },
+  "quality": {
+    "baseline": "pass",
+    "candidate": "pass",
+    "scope": "six fixed fixtures, two repeats, independent AI rubric reviews plus strict JSON checks"
+  },
+  "per_case": {
+    "summary-pilot": {
+      "baseline_request_seconds": 13.9891759059974,
+      "candidate_request_seconds": 9.426124026533216,
+      "latency_ratio": 1.4840857033728638,
+      "latency_reduction_percent": 32.618446648511465,
+      "baseline_range_seconds": [
+        13.588698165956885,
+        14.389653646037914
+      ],
+      "candidate_range_seconds": [
+        9.403093163040467,
+        9.449154890025966
+      ],
+      "baseline_output_tokens": [
+        39,
+        39
+      ],
+      "candidate_output_tokens": [
+        39,
+        39
+      ],
+      "outputs_identical_by_repeat": true,
+      "baseline_generated_tokens_per_second": 3.130602844277969,
+      "candidate_generated_tokens_per_second": 4.641926988778486
+    },
+    "summary-incident": {
+      "baseline_request_seconds": 13.579104082542472,
+      "candidate_request_seconds": 9.20711791497888,
+      "latency_ratio": 1.4748485039439858,
+      "latency_reduction_percent": 32.196425780286134,
+      "baseline_range_seconds": [
+        13.466069907066412,
+        13.692138258018531
+      ],
+      "candidate_range_seconds": [
+        9.07459974300582,
+        9.339636086951941
+      ],
+      "baseline_output_tokens": [
+        38,
+        38
+      ],
+      "candidate_output_tokens": [
+        38,
+        38
+      ],
+      "outputs_identical_by_repeat": true,
+      "baseline_generated_tokens_per_second": 3.1200126740096987,
+      "candidate_generated_tokens_per_second": 4.642148119274298
+    },
+    "json-person": {
+      "baseline_request_seconds": 10.267485111544374,
+      "candidate_request_seconds": 6.746377049479634,
+      "latency_ratio": 1.5219257738249796,
+      "latency_reduction_percent": 34.29377324448944,
+      "baseline_range_seconds": [
+        10.178950176108629,
+        10.35602004698012
+      ],
+      "candidate_range_seconds": [
+        6.635147852939554,
+        6.857606246019714
+      ],
+      "baseline_output_tokens": [
+        27,
+        27
+      ],
+      "candidate_output_tokens": [
+        27,
+        27
+      ],
+      "outputs_identical_by_repeat": true,
+      "baseline_generated_tokens_per_second": 3.066334582798137,
+      "candidate_generated_tokens_per_second": 4.661429045725617
+    },
+    "json-orders": {
+      "baseline_request_seconds": 12.865992829028983,
+      "candidate_request_seconds": 8.3213906379533,
+      "latency_ratio": 1.5461349417185224,
+      "latency_reduction_percent": 35.3225922901332,
+      "baseline_range_seconds": [
+        12.62470648100134,
+        13.107279177056625
+      ],
+      "candidate_range_seconds": [
+        8.084325268981047,
+        8.558456006925553
+      ],
+      "baseline_output_tokens": [
+        34,
+        34
+      ],
+      "candidate_output_tokens": [
+        34,
+        34
+      ],
+      "outputs_identical_by_repeat": true,
+      "baseline_generated_tokens_per_second": 2.999312738887528,
+      "candidate_generated_tokens_per_second": 4.651334611004766
+    },
+    "code-default-list": {
+      "baseline_request_seconds": 45.43616915948223,
+      "candidate_request_seconds": 31.91649154003244,
+      "latency_ratio": 1.4235953567293649,
+      "latency_reduction_percent": 29.755320198750347,
+      "baseline_range_seconds": [
+        45.40392786893062,
+        45.46841045003384
+      ],
+      "candidate_range_seconds": [
+        30.848432937986217,
+        32.98455014207866
+      ],
+      "baseline_output_tokens": [
+        138,
+        138
+      ],
+      "candidate_output_tokens": [
+        138,
+        138
+      ],
+      "outputs_identical_by_repeat": true,
+      "baseline_generated_tokens_per_second": 3.1349339134327225,
+      "candidate_generated_tokens_per_second": 4.463711333616352
+    },
+    "code-missing-last": {
+      "baseline_request_seconds": 49.19551617902471,
+      "candidate_request_seconds": 34.077870499459095,
+      "latency_ratio": 1.4436206094452284,
+      "latency_reduction_percent": 30.72972265308045,
+      "baseline_range_seconds": [
+        49.169898122083396,
+        49.22113423596602
+      ],
+      "candidate_range_seconds": [
+        33.38677573995665,
+        34.76896525896154
+      ],
+      "baseline_output_tokens": [
+        149,
+        149
+      ],
+      "candidate_output_tokens": [
+        150,
+        150
+      ],
+      "outputs_identical_by_repeat": false,
+      "baseline_generated_tokens_per_second": 3.11250780768186,
+      "candidate_generated_tokens_per_second": 4.5429189112291315
+    }
+  },
+  "measured_request_totals_seconds": {
+    "baseline": 290.66688653524034,
+    "candidate": 199.39074333687313,
+    "latency_ratio": 1.4577752290343542
+  },
+  "resources": {
+    "baseline": {
+      "interval_seconds": 0.25,
+      "sample_count": 998,
+      "scope": {
+        "gpu_device_used_bytes": "whole GPU including other processes; sampled maximum, not continuous peak",
+        "system_memory_used_bytes": "host MemTotal-MemAvailable; includes competing workloads and reclaimable-memory estimate",
+        "server_rss_bytes": "owned server process VmRSS only; not all host RAM or child RSS"
+      },
+      "gpu_device_used_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 7403274240
+      },
+      "system_memory_used_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 19506254848
+      },
+      "server_rss_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 17728733184
+      }
+    },
+    "candidate": {
+      "interval_seconds": 0.25,
+      "sample_count": 693,
+      "scope": {
+        "gpu_device_used_bytes": "whole GPU including other processes; sampled maximum, not continuous peak",
+        "system_memory_used_bytes": "host MemTotal-MemAvailable; includes competing workloads and reclaimable-memory estimate",
+        "server_rss_bytes": "owned server process VmRSS only; not all host RAM or child RSS"
+      },
+      "gpu_device_used_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 11142496256
+      },
+      "system_memory_used_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 19351221248
+      },
+      "server_rss_bytes": {
+        "status": "ok",
+        "sampled_peak_bytes": 17728950272
+      }
+    }
+  },
+  "environment": {
+    "baseline_load_average": [
+      7.4052734375,
+      11.17333984375,
+      13.2021484375
+    ],
+    "candidate_load_average": [
+      7.26123046875,
+      10.69677734375,
+      12.39599609375
+    ]
+  },
+  "limitations": [
+    "Two repeats only; no statistical significance or production SLA claim.",
+    "Host load may differ; sequential runs are not randomized.",
+    "Output lengths/content may differ despite fixed prompts and generation settings; inspect per-case token counts.",
+    "GPU/system peaks include competing processes; RSS is owned server only; all peaks sampled.",
+    "New process, warm filesystem cache not controlled; TTFT unavailable from non-stream requests."
+  ]
+}

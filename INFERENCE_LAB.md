@@ -123,3 +123,20 @@ Per-case aggregates retain count/mean/median/min/max. Two repeats illustrate obs
 Baseline `20261114T054137Z-0e00a3ea0c` completed12/12 nontruncated measurements after one warmup, with all observed cached-prompt counts zero and cleanup confirmed. The independent AI acceptor reviewed the exact eight repeated summary/code outputs against the rubric, with per-output and run/dataset hashes; both JSON tasks passed strict checks in both repeats. The baseline is measurement-complete and quality-reviewed eligible through its appended review.
 
 Observed total run308.61 seconds, readiness3.69 seconds. Per-task mean request times: summaries13.99/13.58s, JSON10.27/12.87s, code45.44/49.20s. Engine generation throughput was approximately3.0–3.13 tokens/s for these fixtures. The998 sampled resource observations gave device-wide GPU peak7,403,274,240 bytes and owned-server RSS peak17,728,733,184 bytes. These are scoped measurements on this host with possible competing CPU workloads, not portable performance promises. Raw evidence and independent acceptance receipts remain in the local ignored evidence directory.
+
+## T5: single-factor optimization comparison
+
+The GPU40 candidate changes only `runtime.gpu_layers` from24 to40 in `experiments/qwen38-27b-q4-gpu40.json`. Run it with the baseline command plus `--baseline-run-id BASELINE_ID`; the new run is an optimization candidate, not a replacement baseline. Independently review its exact new outputs before comparing.
+
+```sh
+venv/bin/python -m inference_lab compare \
+  --baseline-dir docs/agent_context/inference-lab/runs/20261114T054137Z-0e00a3ea0c \
+  --candidate-dir docs/agent_context/inference-lab/runs/20261114T054955Z-b62d4eb4a9 \
+  --output-dir NEW_UNIQUE_COMPARISON_DIRECTORY
+```
+
+The comparator checks model/runtime/source/hardware/dataset/protocol identity, actual prompts and generation settings, observed cached-token counts, complete nontruncated sample coverage, pre-start/final manifest consistency, artifact hashes and independent review bindings. It accepts only the declared GPU-layer change and refuses quality-pending or incompatible runs. Each comparison is written once to a new directory.
+
+Final versioned result: `results/qwen38-rtx3080-20261114-v2/report.md`, with structured comparison and `REPRODUCE.md`. The original generated comparison is retained as history. The tracked result includes exact local evidence digests and provenance; raw runs remain ignored and do not travel in Git. The reproduction guide includes optional evidence export and host-specific runtime/library details.
+
+The measured12-request total improved from290.67s to199.39s (1.46× observed latency ratio), while sampled device VRAM rose from7.40GB to11.14GB. Both runs passed the12 fixed short text samples. The40-layer setting is a tested starting point for these tasks; it does not establish long-context, full-agent or media-generation capability. All services were stopped, caches retained for reuse, and no cloud resources or system driver files were changed.
