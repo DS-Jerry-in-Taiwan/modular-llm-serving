@@ -12,7 +12,7 @@ from unittest.mock import patch
 import urllib.error
 import urllib.request
 
-from inference_lab import demo
+from inference_lab.web import jobs, server as web_server
 
 
 class FakeSampler:
@@ -54,14 +54,14 @@ class DemoTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.config = json.loads((demo.ROOT / 'experiments/qwen38-27b-q4.json').read_text())
+        self.config = json.loads((web_server.ROOT / 'experiments/qwen38-27b-q4.json').read_text())
         opt = copy.deepcopy(self.config)
         opt['runtime']['gpu_layers'] = 40
-        self.manager = demo.DemoManager('/fake/server', '/fake/model', self.temp.name, self.config, opt, verify_async=False)
+        self.manager = jobs.DemoManager('/fake/server', '/fake/model', self.temp.name, self.config, opt, verify_async=False)
         self.manager.status, self.manager.identity = 'ready', {'cached': True}
         FakeServer.instances, FakeServer.gate, FakeServer.live, FakeServer.max_live = [], None, 0, 0
         for target, value in [('LocalServer', FakeServer), ('ResourceSampler', FakeSampler), ('gpu_probe', lambda: {'status': 'ok'})]:
-            p = patch.object(demo, target, value)
+            p = patch.object(jobs, target, value)
             p.start()
             self.addCleanup(p.stop)
         self.addCleanup(self.manager.shutdown)
@@ -107,7 +107,7 @@ class DemoTests(unittest.TestCase):
                 with self.assertRaises(ValueError): self.manager.submit(body)
         opt = copy.deepcopy(self.config)
         opt['runtime'].update(gpu_layers=40, threads=16)
-        with self.assertRaises(ValueError): demo.DemoManager('x', 'y', self.temp.name, self.config, opt)
+        with self.assertRaises(ValueError): jobs.DemoManager('x', 'y', self.temp.name, self.config, opt)
 
     def test_cleanup_failure_blocks_future_jobs(self):
         def bad_stop(server):
@@ -123,7 +123,7 @@ class DemoTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): self.manager.submit({'prompt': 'again'})
 
     def test_evidence_write_failures_converge_and_allow_recovery(self):
-        original_write = demo.write_json_new
+        original_write = jobs.write_json_new
         for target, error_code in [(target, code) for target in ['resource-samples.json', 'raw-response.json', 'variant-run', 'top-run', 'all'] for code in [errno.ENOSPC, errno.EACCES]]:
             with self.subTest(target=target, error_code=error_code):
                 def fail_selected(path, value):
@@ -131,7 +131,7 @@ class DemoTests(unittest.TestCase):
                     if selected:
                         raise OSError(error_code, '/private/evidence-secret')
                     original_write(path, value)
-                with patch.object(demo, 'write_json_new', side_effect=fail_selected):
+                with patch.object(jobs, 'write_json_new', side_effect=fail_selected):
                     run_id = self.manager.submit({'prompt': 'persist', 'variants': ['baseline']})
                     result = self.wait_run(run_id)
                 self.assertEqual(result['status'], 'failed')
@@ -172,7 +172,7 @@ class DemoTests(unittest.TestCase):
 
     def test_manifest_write_failures_never_reserve_gpu(self):
         for error_code in [errno.ENOSPC, errno.EACCES]:
-            with self.subTest(error_code=error_code), patch.object(demo, 'write_json_new', side_effect=OSError(error_code, '/private/manifest-secret')):
+            with self.subTest(error_code=error_code), patch.object(jobs, 'write_json_new', side_effect=OSError(error_code, '/private/manifest-secret')):
                 with self.assertRaises(OSError):
                     self.manager.submit({'prompt': 'manifest failure'})
             self.assertIsNone(self.manager.active)
@@ -203,7 +203,7 @@ class DemoTests(unittest.TestCase):
                 started.set()
                 server.process.wait(timeout=5)
                 raise RuntimeFailure('owned process stopped')
-        with patch.object(demo, 'LocalServer', RealServer), patch('inference_lab.runtime.free_loopback_port', return_value=18441), patch('inference_lab.runtime.http_json', return_value={'status': 'ok'}):
+        with patch.object(jobs, 'LocalServer', RealServer), patch('inference_lab.runtime.free_loopback_port', return_value=18441), patch('inference_lab.runtime.http_json', return_value={'status': 'ok'}):
             run_id = self.manager.submit({'prompt': 'cancel owned child'})
             self.assertTrue(started.wait(2))
             self.manager.cancel(run_id)
@@ -221,12 +221,12 @@ class DemoTests(unittest.TestCase):
     def test_cleanup_failure_retains_ownership_even_when_evidence_fails(self):
         def failed_stop(server):
             raise RuntimeError('/private/cleanup-secret')
-        original_write = demo.write_json_new
+        original_write = jobs.write_json_new
         def failed_receipt(path, value):
             if path.name in {'raw-response.json', 'run.json'}:
                 raise OSError('/private/write-secret')
             original_write(path, value)
-        with patch.object(FakeServer, 'stop', failed_stop), patch.object(demo, 'write_json_new', side_effect=failed_receipt):
+        with patch.object(FakeServer, 'stop', failed_stop), patch.object(jobs, 'write_json_new', side_effect=failed_receipt):
             run_id = self.manager.submit({'prompt': 'retain ownership'})
             result = self.wait_run(run_id)
         self.assertEqual(result['status'], 'failed')
@@ -244,13 +244,13 @@ class DemoTests(unittest.TestCase):
 
     def test_identity_is_cached_once_and_failure_blocks_submission(self):
         self.manager.status = 'checking'
-        with patch.object(demo, 'verify_model', return_value={'sha256': 'pinned'}) as model_verify, patch.object(demo, 'runtime_identity', return_value={'pin_verified': True}) as runtime_verify:
+        with patch.object(jobs, 'verify_model', return_value={'sha256': 'pinned'}) as model_verify, patch.object(jobs, 'runtime_identity', return_value={'pin_verified': True}) as runtime_verify:
             self.manager.verify()
             self.assertTrue(self.manager.info()['ready'])
             for _ in range(3): self.manager.info()
             self.assertEqual(model_verify.call_count, 1)
             self.assertEqual(runtime_verify.call_count, 1)
-        with patch.object(demo, 'verify_model', side_effect=ValueError('/private/model-secret')):
+        with patch.object(jobs, 'verify_model', side_effect=ValueError('/private/model-secret')):
             self.manager.verify()
         self.assertEqual(self.manager.info()['status'], 'blocked')
         self.assertNotIn('private', self.manager.info()['error'])
@@ -271,7 +271,7 @@ class DemoTests(unittest.TestCase):
 
     def test_forwarded_loopback_authority_preserves_same_origin(self):
         (Path(self.temp.name) / 'index.html').write_text('<!doctype html><title>Demo</title>')
-        server = demo.DemoHTTPServer(('127.0.0.1', 0), demo.handler_for(self.manager, self.temp.name))
+        server = web_server.DemoHTTPServer(('127.0.0.1', 0), web_server.handler_for(self.manager, self.temp.name))
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
@@ -314,8 +314,24 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(request('/api/runs', ['localhost:63565'], 'http://localhost:63565', body, [('Origin', 'http://localhost:63565')])[0], 403)
         self.assertEqual(request('/api/info', ['evil.example'], extra=[('X-Forwarded-Host', 'localhost:63565')])[0], 403)
 
+    def test_default_static_and_historical_reference_routes(self):
+        server = web_server.DemoHTTPServer(('127.0.0.1', 0), web_server.handler_for(self.manager))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        static_root = Path(web_server.__file__).parent / 'static'
+        url = f'http://127.0.0.1:{server.server_port}'
+        for route, filename in [('/', 'index.html'), ('/app.js', 'app.js'), ('/style.css', 'style.css')]:
+            with self.subTest(route=route), urllib.request.urlopen(url + route, timeout=2) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.read(), (static_root / filename).read_bytes())
+                self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        with urllib.request.urlopen(url + '/reference', timeout=2) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn(b'Historical controlled benchmark', response.read())
+
     def test_http_security_and_contract(self):
-        server = demo.DemoHTTPServer(('127.0.0.1', 0), demo.handler_for(self.manager, self.temp.name))
+        server = web_server.DemoHTTPServer(('127.0.0.1', 0), web_server.handler_for(self.manager, self.temp.name))
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         self.addCleanup(server.server_close)

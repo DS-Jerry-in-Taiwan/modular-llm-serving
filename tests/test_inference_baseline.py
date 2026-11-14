@@ -86,10 +86,10 @@ class BaselineTests(unittest.TestCase):
             self.assertIsNone(importlib.util.find_spec('inference_lab.' + name))
             self.assertIsNotNone(importlib.util.find_spec('inference_lab.evaluation.' + name))
         root = DATASET.parent.parent / 'inference_lab'
-        for name in ('config', 'artifacts', 'telemetry', 'runtime', 'acquisition', 'demo'):
+        for name in ('config', 'artifacts', 'telemetry', 'runtime', 'acquisition', 'demo', 'web/jobs', 'web/server'):
             tree = ast.parse((root / (name + '.py')).read_text())
             imports = [node.module or '' for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
-            self.assertFalse(any(module.startswith(('evaluation', 'inference_lab.evaluation')) for module in imports), name)
+            self.assertFalse(any(module.startswith(('evaluation', 'inference_lab.evaluation', '..evaluation')) for module in imports), name)
 
     def test_review_quality_cannot_pass_failed_or_truncated_samples(self):
         dataset, _ = load_dataset(DATASET)
