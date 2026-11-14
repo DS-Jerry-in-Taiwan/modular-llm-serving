@@ -140,3 +140,25 @@ The comparator checks model/runtime/source/hardware/dataset/protocol identity, a
 Final versioned result: `results/qwen38-rtx3080-20261114-v2/report.md`, with structured comparison and `REPRODUCE.md`. The original generated comparison is retained as history. The tracked result includes exact local evidence digests and provenance; raw runs remain ignored and do not travel in Git. The reproduction guide includes optional evidence export and host-specific runtime/library details.
 
 The measured12-request total improved from290.67s to199.39s (1.46× observed latency ratio), while sampled device VRAM rose from7.40GB to11.14GB. Both runs passed the12 fixed short text samples. The40-layer setting is a tested starting point for these tasks; it does not establish long-context, full-agent or media-generation capability. All services were stopped, caches retained for reuse, and no cloud resources or system driver files were changed.
+
+## Local live comparison demo
+
+The loopback-only web interface runs the pinned Qwen3.8-27B Q4_K_M model on the local GPU. It compares the 24 GPU-layer baseline with the 40 GPU-layer configuration, sequentially, with confirmed owned-process cleanup between configurations. Start from the repository root with the existing private driver libraries available:
+
+```bash
+LD_LIBRARY_PATH=/home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu \
+PYTHONDONTWRITEBYTECODE=1 venv/bin/python -m inference_lab.demo \
+  --binary /home/ubuntu/.cache/inference-lab/runtime/llama-fa676981/build/bin/llama-server \
+  --model /home/ubuntu/.cache/inference-lab/models/Qwen3.8-27B-Q4_K_M.gguf \
+  --output-root docs/local-inference/demo-runs --port 7860
+```
+
+Open `http://127.0.0.1:7860`. The interface is available immediately while asynchronous startup verifies the full pinned model checksum, runtime identity, and actual GPU telemetry. Requests remain disabled until readiness passes. Configuration paths can be supplied through `--baseline-config` and `--optimized-config`; they must pin the same model and differ only in 24 versus 40 GPU layers. HTTP clients cannot choose paths or runtime arguments.
+
+If the service runs on a remote inference machine, its port 7860 remains bound to that machine’s loopback interface. On your own computer, forward it with `ssh -N -L 7860:127.0.0.1:7860 user@host`, replacing `user@host` with your configured SSH destination, then open `http://127.0.0.1:7860` locally. An SSH alias such as `llm-server` can replace the destination only if you have configured it; no alias is assumed or verified here.
+
+Each request accepts 1–3000 prompt characters and 16–256 output tokens (default 192). Generation uses temperature 0, seed 42, and `cache_prompt=false`. One job can own the GPU; a second job receives HTTP 409. Cancellation and Ctrl-C/SIGTERM stop the owned process group and prevent the next configuration from starting. Each configuration has a 600-second deadline, the whole job at most 1200 seconds, and each generation request at most 120 seconds. Cleanup failure blocks further runs.
+
+The interface reports observed loading/generating/cleanup phases and non-stream request time; it does not estimate progress or TTFT. GPU memory is a sampled maximum for the whole device, including other processes. Live runs have no warmup and filesystem cache is uncontrolled, so their timings are exploratory. A token-limit truncation is explicitly shown; completing execution does not establish response quality. Arbitrary user prompts receive no automatic quality verdict. `/reference` displays the existing historical controlled benchmark separately.
+
+The latest 20 run summaries are retained in memory for the current server process. Full immutable manifests, per-configuration raw responses, server logs, resource samples and final run records remain under the ignored output directory after restart; browser history is not reconstructed from disk. Prompts and outputs are local evidence and are not sent to a cloud service. The server only binds `127.0.0.1`, accepts same-origin JSON POST requests up to 64 KB, and serves a fixed allowlist from `demo_web`.
