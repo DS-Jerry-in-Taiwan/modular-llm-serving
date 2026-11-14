@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "experiment_id": "qwen38-27b-q4-local",
+  "model": {
+    "repository": "bartowski/Qwen3.8-27B-GGUF",
+    "revision": "87410e7b9a5c21e6ca70c0c9cc5237de909fe621",
+    "filename": "Qwen3.8-27B-Q4_K_M.gguf",
+    "sha256": "880a52af8317974f7b4b064a6bc29ff49e188b91aa218e08eea3078b6b1cc673",
+    "size_bytes": 17442399968,
+    "quantization": "Q4_K_M",
+    "upstream_repository": "Qwen/Qwen3.8-27B",
+    "upstream_revision": "37561816e66b5b9153b1b64c10968c18c1e6f4a0",
+    "license": "apache-2.0"
+  },
+  "runtime": {
+    "engine": "llama.cpp",
+    "tag": "b10896",
+    "revision": "fa6769818708afd9807b22183ccda112fd563427",
+    "context_size": 4096,
+    "gpu_layers": 24,
+    "threads": 8,
+    "parallel": 1,
+    "note": "Proposed starting configuration; actual GPU allocation and model support must be validated in T2. Isolated external runtime; preserve repo submodule."
+  },
+  "resources": {
+    "target_gpu": "NVIDIA GeForce RTX 3080 12GB",
+    "allow_cpu_offload": true,
+    "disk_reserve_bytes": 5368709120
+  },
+  "budgets": {
+    "download_bytes": 25000000000,
+    "runtime_storage_bytes": 5368709120,
+    "smoke_seconds": 600,
+    "experiment_seconds": 3600,
+    "suite_prompts": 6,
+    "measured_repeats": 2,
+    "warmup_requests": 1,
+    "note": "Execution caps, not quality or performance acceptance baselines."
+  }
+}
