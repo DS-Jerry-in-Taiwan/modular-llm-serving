@@ -95,7 +95,8 @@ sequenceDiagram
 | `GET /api/runs/ID`, `GET /api/history` | Current-process snapshots; returned data is copied from manager state. |
 | `POST /api/runs/ID/cancel` | Empty JSON object; 202 cancellation requested or 404 unknown ID. Completion is observed by polling. |
 | `/`, `/index.html`, `/app.js`, `/style.css` | Fixed static allowlist from `web/static`. |
-| `GET /reference` | Preserved historical report, separate from arbitrary live-prompt results. |
+| `GET /reference` | Latest converged V1 fixed benchmark report, separate from arbitrary live-prompt results. |
+| `GET /api/reference` | Safe projection of the fixed V1 comparison: run IDs, measured request totals, sampled GPU peaks, per-case timing, quality scope and limitations; no local evidence paths. Reads only fixed result files with a 2 MiB limit each. Missing, malformed or oversized evidence returns HTTP 200 with `status: unavailable` and no fabricated metrics. |
 
 HTTP accepts loopback Host authorities, including forwarded local ports and IPv6 loopback syntax. JSON POST Origin, when supplied, must match the Host authority and HTTP scheme. Duplicate Host/Origin, arbitrary hosts, transfer encoding and oversized bodies are rejected. The listener binds `127.0.0.1`; SSH forwarding exposes it on the user's own loopback port. It has no authentication or cross-process GPU lock.
 
