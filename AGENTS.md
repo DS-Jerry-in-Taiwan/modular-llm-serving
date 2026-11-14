@@ -1,17 +1,21 @@
 # AGENTS.md — Repository Guidance
 
-This is a **Modal + llama.cpp `llama-server` smoke/deployment-validation** project using a
-single fixed GGUF model — NOT a generic production platform. Local checks are done with the
-`venv/` Python 3.12.3 + Modal 1.5.3 environment.
+This repository contains a local inference lab and a preserved **Modal + llama.cpp
+`llama-server` smoke/deployment-validation** path. The local lab uses pinned Qwen GGUF
+configuration, an external runtime/model cache, CLI evaluation, and a loopback demo; see
+`README.md`, `ARCHITECTURE.md` and `INFERENCE_LAB.md`. It is not a generic production
+platform. The original Modal contract below still uses its fixed Gemma model.
+Local checks use the `venv/` Python 3.12.3 + Modal 1.5.3 environment.
 
 ## Local verification commands
 
 ```bash
-venv/bin/python -m py_compile modal_llama_smoke.py tests/test_modal_llama_smoke.py
+venv/bin/python -m py_compile modal_llama_smoke.py tests/test_modal_llama_smoke.py inference_lab/*.py inference_lab/evaluation/*.py inference_lab/web/*.py
 PYTHONDONTWRITEBYTECODE=1 venv/bin/python -m unittest discover -s tests -v
 ```
 
-Both must exit 0. `modal_llama_smoke.py` is the fail-closed contract; `tests/` is its local suite.
+Both must exit 0. `modal_llama_smoke.py` is the preserved fail-closed deployment contract.
+`tests/` also covers the separate local inference modules; passing tests alone do not prove GPU inference.
 
 ## Deployment contract
 

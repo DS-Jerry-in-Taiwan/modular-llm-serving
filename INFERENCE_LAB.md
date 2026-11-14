@@ -1,8 +1,8 @@
 # Local inference experiments
 
-This additive experiment path is separate from the fixed Gemma/Modal deployment. First target: Qwen3.8-27B on RTX 3080 12GB with system RAM offload. Successful unit tests are not GPU or model-load evidence.
+This local experiment path is separate from the fixed Gemma/Modal deployment. First target: Qwen3.8-27B on RTX 3080 12GB with system RAM offload. Successful unit tests are not GPU or model-load evidence.
 
-The first interface uses a versioned JSON configuration and CLI so the same headless experiment can be repeated and compared without an interactive UI.
+The CLI uses versioned JSON configuration for repeatable headless experiments. The loopback demo shares the core runtime and telemetry. See [repository entrypoint](README.md) and [architecture/interfaces](ARCHITECTURE.md) for the canonical module layout and ownership contracts.
 
 ## T1: read-only preflight
 
@@ -17,14 +17,14 @@ Use a unique output path: previous reports are never overwritten. Exit 0 means r
 
 The versioned JSON configuration pins a public model revision, file size and LFS SHA-256. It pins llama.cpp b10896 (the quantizer release named by the model publisher), built/downloaded into an **external** runtime directory; do not change the repo's existing llama.cpp submodule or use the existing Modal provider for localhost auth. Runtime architecture compatibility still requires a real T2 smoke test.
 
-## Proposed executable plan and resource caps
+## Execution protocol and resource caps
 
 1. Establish genuine NVML/CUDA functionality. PCI/device presence alone is insufficient. A zero-byte `nvidia-smi` or driver `.so` file is not usable GPU support. Repair by isolated matching userspace libraries only after agreeing the execution approach; never replace system driver files automatically.
 2. Resolve the immutable quantized model and verify filename/size/SHA-256 after acquisition. Current Q4_K_M is 17,442,399,968 bytes; it needs CPU offload on 12GB. No image projector is needed for initial text tasks.
 3. Use an external pinned llama.cpp build, single request slot and 4096-token context. Start with 24 GPU layers and 8 CPU threads, validate actual allocation, and stop before OOM rather than silently switching to CPU-only or a different model.
 4. Smoke cap: 600 seconds. Then three text categories, at most six initial prompts, one warmup and two measured repeats; total initial experiment cap 3600 seconds. These are operational budgets, not performance acceptance thresholds.
 5. Download cap 25,000,000,000 bytes; runtime storage reserve 5 GiB. Cache downloaded model outside Git. Do not start acquisition until the host is runnable.
-6. Later tickets add immutable run records, task scoring, baseline repetitions and optimization comparison. Baselines and usability thresholds come from actual tests, not guessed tokens/s.
+6. Immutable run records, task scoring, repeated baselines and reviewed single-factor comparison are implemented in `inference_lab/evaluation/`. Baselines and usability thresholds come from actual tests, not guessed tokens/s.
 
 ## Host observation on 2026-11-14
 
@@ -110,7 +110,7 @@ Run `20261114T053113Z-57fe28c22d` completed all six real GPU cases in183.06 seco
 
 Use the same suite command arguments with `baseline` instead of `suite`, plus `--repeats 2`. This starts a new owned server, runs one unmeasured warmup, then each of six cases twice in repeat-major dataset order. Every request fixes `cache_prompt=false`; actual engine-reported cached tokens are saved separately. A new process is not a cold filesystem cache, and startup time is labelled accordingly.
 
-A pre-start immutable `manifest.json` captures config/dataset/source identities, exact runtime/model identities, host environment, protocol and baseline ID. Source hashes cover the actual runner/runtime/scorer files even if the working tree has changes; git commit and dirty status remain visible. The original run, manifest, samples and append-only review are never overwritten. `progress.json` is explicitly mutable progress, and `report.md` is a derived view.
+A pre-start immutable `manifest.json` captures config/dataset/source identities, exact runtime/model identities, host environment, protocol and baseline ID. Source hashes follow the baseline runner’s actual transitive local relative imports and package initializers, using paths relative to `inference_lab/` (including `evaluation/baseline.py` and `evaluation/tasks.py`), even if the working tree has changes; git commit and dirty status remain visible. Old manifests retain their original source identities. The original run, manifest, samples and append-only review are never overwritten. `progress.json` is explicitly mutable progress, and `report.md` is a derived view.
 
 GPU device-wide used memory, host `MemTotal-MemAvailable`, and owned server process `VmRSS` are sampled every0.25 seconds, including model load when a process exists. Reported maxima are **sampled peaks**, not continuous maxima, and GPU/system values include unrelated workloads. Missing metrics are unavailable, never zero. Non-stream TTFT is unavailable because first-token arrival was not observed. Request elapsed time and engine token throughput are distinct metrics; actual cached tokens and input/output token counts are retained per sample.
 
@@ -157,8 +157,26 @@ Open `http://127.0.0.1:7860`. The interface is available immediately while async
 
 If the service runs on a remote inference machine, its port 7860 remains bound to that machine’s loopback interface. On your own computer, forward it with `ssh -N -L 7860:127.0.0.1:7860 user@host`, replacing `user@host` with your configured SSH destination, then open `http://127.0.0.1:7860` locally. An SSH alias such as `llm-server` can replace the destination only if you have configured it; no alias is assumed or verified here.
 
-Each request accepts 1–3000 prompt characters and 16–256 output tokens (default 192). Generation uses temperature 0, seed 42, and `cache_prompt=false`. One job can own the GPU; a second job receives HTTP 409. Cancellation and Ctrl-C/SIGTERM stop the owned process group and prevent the next configuration from starting. Each configuration has a 600-second deadline, the whole job at most 1200 seconds, and each generation request at most 120 seconds. Cleanup failure blocks further runs.
+Each request accepts 1–3000 prompt characters and 16–256 output tokens (default 192). Generation uses temperature 0, seed 42, and `cache_prompt=false`. One job in this demo process can own the GPU; a second job receives HTTP 409. There is no cross-process GPU lock: stop the demo before running CLI measurements, and do not run independent inference processes concurrently. Cancellation and Ctrl-C/SIGTERM stop the owned process group and prevent the next configuration from starting. Each configuration has a 600-second deadline, the whole job at most 1200 seconds, and each generation request at most 120 seconds. Cleanup failure blocks further runs.
 
 The interface reports observed loading/generating/cleanup phases and non-stream request time; it does not estimate progress or TTFT. GPU memory is a sampled maximum for the whole device, including other processes. Live runs have no warmup and filesystem cache is uncontrolled, so their timings are exploratory. A token-limit truncation is explicitly shown; completing execution does not establish response quality. Arbitrary user prompts receive no automatic quality verdict. `/reference` displays the existing historical controlled benchmark separately.
 
-The latest 20 run summaries are retained in memory for the current server process. Full immutable manifests, per-configuration raw responses, server logs, resource samples and final run records remain under the ignored output directory after restart; browser history is not reconstructed from disk. Prompts and outputs are local evidence and are not sent to a cloud service. The server only binds `127.0.0.1`, accepts same-origin JSON POST requests up to 64 KB, and serves a fixed allowlist from `demo_web`.
+The latest 20 run summaries are retained in memory for the current server process. Full immutable manifests, per-configuration raw responses, server logs, resource samples and final run records remain under the ignored output directory after restart; browser history is not reconstructed from disk. Prompts and outputs are local evidence and are not sent to a cloud service. The server only binds `127.0.0.1`, accepts same-origin JSON POST requests up to 64 KB, and serves a fixed allowlist from `inference_lab/web/static/`. `inference_lab/demo.py` is the permanent public launcher; HTTP and job implementation live in `web/server.py` and `web/jobs.py`.
+
+
+## Converged implementation and fresh validation
+
+Configuration validation lives in `config.py`; read-only diagnostics remain in `preflight.py`; `runtime.py` owns bounded llama-server processes; `telemetry.py` owns probes, sampling and metrics; `artifacts.py` owns hashing, unique runs and exclusive JSON writes. Evaluation code is canonical under `evaluation/`; the old flat task/baseline/comparison modules are removed. The web path calls shared core modules directly and does not score arbitrary live prompts.
+
+Disk-full and permission failures in resource/raw/variant/final evidence writes produce terminal failed jobs while preserving cleanup and ownership rules. Unconfirmed process cleanup keeps the demo blocked and retains the owned-server reference. If final receipt persistence fails after successful variants, the job reports failure while those completed variant artifacts remain intact. An unwritable output filesystem cannot guarantee a final disk receipt.
+
+Fresh post-convergence baseline/candidate evidence is recorded separately under ignored `docs/agent_context/inference-lab/convergence/`; historical `results/` and earlier raw run directories remain unchanged. Fresh results must be reviewed against their own exact output/run/dataset hashes before comparison.
+
+
+### Fresh V1 convergence GPU validation (2026-11-14)
+
+The converged implementation ran a fresh baseline `20261114T131732Z-1327935c51` and GPU40 candidate `20261114T132436Z-34b235865f` with identical measurement source aggregate `799021a7634ec65dd81ece0323caea9199fc4b02f3124fce21cf8a645f898ccc`. Each completed all twelve nontruncated samples after one warmup with cleanup confirmed and observed 24/40 offloaded layers. An independent AI acceptor reviewed every repeated summary/code output with exact run/dataset/output bindings; strict JSON checks passed for both repeated extraction cases.
+
+The fresh measured request total was **343.08s → 218.10s (1.57× observed ratio)**. Whole runs were 387.58s and 244.40s, distinct from measured request time; the combined GPU pair used 631.98s within the 3600-second budget. Sampled device-wide GPU peaks were 7.40GB → 11.13GB. These short fixed fixtures and two sequential repeats retain the host-load/cache/statistical limitations above. They are not a comparison against the original historical pair.
+
+See the new [fresh report](results/convergence-v1-20261114/report.md), [exact comparison identities](results/convergence-v1-20261114/comparison.json), and [reproduction instructions](results/convergence-v1-20261114/REPRODUCE.md). The earlier [historical result](results/qwen38-rtx3080-20261114-v2/report.md) remains unchanged. Raw fresh runs and append-only reviews remain under ignored `docs/agent_context/inference-lab/convergence/runs/`.
