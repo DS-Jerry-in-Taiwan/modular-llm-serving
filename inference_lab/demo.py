@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import html
 from pathlib import Path
+import re
 import signal
 import threading
 import time
@@ -27,6 +28,19 @@ EXAMPLES = [
     {"id": "code", "label": "程式碼", "prompt": "請寫一個 Python 函式，移除串列中的重複項目並保留原始順序，附上一個簡短範例。"},
     {"id": "json", "label": "JSON 格式", "prompt": "請只輸出合法 JSON，列出三種水果，每個項目包含 name 和 color 欄位。"},
 ]
+
+
+def loopback_authority(value):
+    """Validate the browser-facing authority, including a forwarded local port."""
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"(localhost|127\.0\.0\.1|\[::1\])(?::([0-9]{1,5}))?", value, re.IGNORECASE)
+    if not match:
+        return None
+    port = int(match.group(2)) if match.group(2) is not None else 80
+    if not 1 <= port <= 65535:
+        return None
+    return match.group(1).lower(), port
 
 
 def now():
@@ -291,7 +305,17 @@ def handler_for(manager, static_root=None):
             self.wfile.write(data)
 
         def valid_host(self):
-            return self.headers.get("Host") in {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
+            hosts = self.headers.get_all("Host", [])
+            return len(hosts) == 1 and loopback_authority(hosts[0]) is not None
+
+        def valid_origin(self):
+            origins = self.headers.get_all("Origin", [])
+            if not origins:  # Local command-line clients need not supply Origin.
+                return True
+            if len(origins) != 1 or not origins[0].startswith("http://"):
+                return False
+            authority = loopback_authority(origins[0][len("http://"):])
+            return authority is not None and authority == loopback_authority(self.headers.get("Host"))
 
         def do_GET(self):
             if not self.valid_host():
@@ -319,7 +343,7 @@ def handler_for(manager, static_root=None):
             self.send_data(404, {"error": "Not found."})
 
         def do_POST(self):
-            if not self.valid_host() or self.headers.get("Origin") not in (None, f"http://{self.headers.get('Host')}"):
+            if not self.valid_host() or not self.valid_origin():
                 return self.send_data(403, {"error": "Same-origin requests required."})
             if self.headers.get_content_type() != "application/json" or self.headers.get("Transfer-Encoding"):
                 return self.send_data(415, {"error": "JSON request required."})

@@ -1,5 +1,6 @@
 """No GPU needed: lifecycle serialization and hostile HTTP request boundaries."""
 import copy
+import http.client
 import json
 from pathlib import Path
 import tempfile
@@ -146,6 +147,51 @@ class DemoTests(unittest.TestCase):
         latest = self.manager.history()['runs'][0]
         self.assertEqual(latest['prompt'], 'history')
         self.assertEqual(latest['max_tokens'], 192)
+
+    def test_forwarded_loopback_authority_preserves_same_origin(self):
+        (Path(self.temp.name) / 'index.html').write_text('<!doctype html><title>Demo</title>')
+        server = demo.DemoHTTPServer(('127.0.0.1', 0), demo.handler_for(self.manager, self.temp.name))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        def request(path, hosts, origin=None, body=None, extra=None):
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=2)
+            try:
+                connection.putrequest('POST' if body is not None else 'GET', path, skip_host=True)
+                for host in hosts: connection.putheader('Host', host)
+                if origin is not None: connection.putheader('Origin', origin)
+                if extra:
+                    for name, value in extra: connection.putheader(name, value)
+                if body is not None:
+                    connection.putheader('Content-Type', 'application/json')
+                    connection.putheader('Content-Length', str(len(body)))
+                connection.endheaders(body)
+                response = connection.getresponse()
+                return response.status, response.read()
+            finally:
+                connection.close()
+
+        for authority in ['localhost:63565', '127.0.0.1:63565', '[::1]:63565', 'LOCALHOST:63565']:
+            with self.subTest(authority=authority):
+                self.assertEqual(request('/', [authority])[0], 200)
+                self.assertEqual(request('/api/info', [authority])[0], 200)
+        body = b'{"prompt":"Forwarded preview","variants":["baseline"]}'
+        status, raw = request('/api/runs', ['localhost:63565'], 'http://localhost:63565', body)
+        self.assertEqual(status, 202)
+        self.assertEqual(self.wait_run(json.loads(raw)['id'])['status'], 'completed')
+        self.assertEqual(request('/api/runs', ['LOCALHOST:63565'], 'http://localhost:63565', body)[0], 202)
+        self.manager.worker.join(2)
+        for host in ['evil.example:63565', 'localhost.evil:63565', 'user@localhost:63565', 'localhost:0', 'localhost:65536', 'localhost:-1', 'localhost:abc', 'localhost:63565/path', 'localhost:63565?', 'localhost:63565#x', 'localhost:63565,evil.example', '::1:63565', '127.0.0.2:63565']:
+            with self.subTest(host=host):
+                self.assertEqual(request('/api/info', [host])[0], 403)
+        self.assertEqual(request('/api/info', [])[0], 403)
+        self.assertEqual(request('/api/info', ['localhost:63565', 'localhost:63565'])[0], 403)
+        for origin in ['http://evil.example:63565', 'http://localhost:63564', 'http://127.0.0.1:63565', 'https://localhost:63565', 'http://localhost:63565/', 'http://user@localhost:63565', 'null']:
+            with self.subTest(origin=origin):
+                self.assertEqual(request('/api/runs', ['localhost:63565'], origin, body)[0], 403)
+        self.assertEqual(request('/api/runs', ['localhost:63565'], 'http://localhost:63565', body, [('Origin', 'http://localhost:63565')])[0], 403)
+        self.assertEqual(request('/api/info', ['evil.example'], extra=[('X-Forwarded-Host', 'localhost:63565')])[0], 403)
 
     def test_http_security_and_contract(self):
         server = demo.DemoHTTPServer(('127.0.0.1', 0), demo.handler_for(self.manager, self.temp.name))
