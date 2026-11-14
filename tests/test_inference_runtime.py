@@ -58,6 +58,24 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(server.cleanup_confirmed)
         self.assertIsNotNone(server.process.poll())
 
+    def test_successful_acquisition_publishes_without_replacing_existing_file(self):
+        import hashlib
+        data = b"GGUF"
+        config = {"model": {"repository": "a/b", "revision": "a" * 40, "filename": "x.gguf", "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}, "budgets": {"download_bytes": 10}}
+        destination = self.root / "download.gguf"
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self, *args):
+                if getattr(self, "done", False): return b""
+                self.done = True
+                return data
+        with patch("inference_lab.acquisition.urllib.request.urlopen", return_value=Response()):
+            acquired = acquire_model(config, destination)
+        self.assertEqual(acquired["sha256"], config["model"]["sha256"])
+        self.assertEqual(destination.read_bytes(), data)
+        self.assertFalse(destination.with_name(destination.name + ".partial").exists())
+
     def test_endpoint_is_always_loopback(self):
         server = LocalServer("/unused", "/unused", self.config, self.root, time.monotonic() + 5)
         self.assertTrue(server.url.startswith("http://127.0.0.1:"))

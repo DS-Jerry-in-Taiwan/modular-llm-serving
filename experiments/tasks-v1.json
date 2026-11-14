@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "dataset_id": "local-text-usefulness-v1",
+  "cases": [
+    {
+      "id": "summary-pilot", "category": "summary", "max_tokens": 192,
+      "prompt": "請只用繁體中文一句話摘要以下內容，不要加入推測：公司邀請12人試用新系統，9人完成任務，3人因連線逾時而中止。團隊預定11月20日重新測試。本次未公布費用。",
+      "checks": {"required_groups": [["12", "十二"], ["9", "九"], ["3", "三"], ["逾時", "超時"], ["11月20", "11 月 20", "11/20"]], "forbidden": ["全部成功", "全面成功", "零失敗"], "max_characters": 160},
+      "manual_required": true,
+      "rubric": ["保留試用人數及完成與中止的區別", "保留中止原因及重測日期", "沒有捏造費用或未提供的結論", "表達簡潔且可讀"]
+    },
+    {
+      "id": "summary-incident", "category": "summary", "max_tokens": 192,
+      "prompt": "請用繁體中文一句話摘要，不推測原因：服務在上午10:00至10:15無法登入。維運團隊重啟服務後恢復登入。目前原因仍在調查，既有資料未遺失。",
+      "checks": {"required_groups": [["10:00", "10：00", "10點", "十點"], ["10:15", "10：15", "15分", "十五分"], ["重啟", "重新啟動"], ["調查", "未明", "未確定"], ["未遺失", "無遺失", "沒有遺失", "無損", "完整"]], "forbidden": ["駭客", "硬碟損壞", "資料已遺失"], "max_characters": 160},
+      "manual_required": true,
+      "rubric": ["正確描述中斷時間及影響", "區分恢復手段與尚未確定的根因", "保留資料未遺失事實", "沒有加入來源未提供的推測"]
+    },
+    {
+      "id": "json-person", "category": "extraction", "max_tokens": 192,
+      "prompt": "只輸出一個JSON物件，不要Markdown或說明。資料：姓名小林，29歲，帳號目前未啟用。欄位固定為name（字串）、age（整數）、active（布林值），不得新增欄位。",
+      "expected_json": {"name": "小林", "age": 29, "active": false},
+      "manual_required": false, "rubric": []
+    },
+    {
+      "id": "json-orders", "category": "extraction", "max_tokens": 192,
+      "prompt": "只輸出JSON陣列，不要Markdown或說明。依原順序整理兩筆訂單：A17金額120元、已付款；B08金額75元、未付款。每筆欄位只允許id（字串）、amount（整數）、paid（布林值）。",
+      "expected_json": [{"id": "A17", "amount": 120, "paid": true}, {"id": "B08", "amount": 75, "paid": false}],
+      "manual_required": false, "rubric": []
+    },
+    {
+      "id": "code-default-list", "category": "code", "max_tokens": 192,
+      "prompt": "以下Python程式兩次print各輸出什麼？用繁體中文簡短說明原因。\ndef add(x, values=[]):\n    values.append(x)\n    return values\nprint(add(1))\nprint(add(2))",
+      "checks": {"required_groups": [["[1]"], ["[1, 2]", "[1,2]"], ["預設", "默認", "default"], ["共用", "共享", "重用", "保留", "同一"]], "forbidden": [], "max_characters": 500},
+      "manual_required": true,
+      "rubric": ["兩次print結果分別為[1]與[1,2]", "指出可變預設串列在呼叫間共用", "原因說明符合Python語義"]
+    },
+    {
+      "id": "code-missing-last", "category": "code", "max_tokens": 192,
+      "prompt": "用繁體中文簡短指出下列Python函式的錯誤並給出修正版。必須說明輸入[2,3,5]時原版與修正版分別回傳什麼。\ndef total(items):\n    result = 0\n    for i in range(len(items)-1):\n        result += items[i]\n    return result",
+      "checks": {"required_groups": [["5"], ["10"], ["最後", "末尾", "末項"], ["range(len(items))", "sum(items)", "for item in items", "for x in items", "for value in items"]], "forbidden": [], "max_characters": 700},
+      "manual_required": true,
+      "rubric": ["指出迴圈漏掉最後一項", "原版回傳5而修正版回傳10", "修正版可執行且涵蓋全部元素"]
+    }
+  ]
+}

@@ -196,6 +196,7 @@ class LocalServer:
                 self.log = None
 
     def chat(self, prompt, max_tokens=64, seed=42, temperature=0):
+        self.last_response = None
         start = time.monotonic()
         try:
             response = http_json(self.url + "/v1/chat/completions", {

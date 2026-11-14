@@ -82,3 +82,26 @@ Run `20261114T052455Z-995842ddd5` used the pinned Q4_K_M artifact and build10896
 Two earlier failed attempts remain in the evidence history: one exposed the need to retry `/health` loading HTTP 503 within the deadline; another lacked offload evidence because the pinned runtime maps loader INFO to trace verbosity4. The harness now retries only known readiness503 and explicitly sets log verbosity4. Missing evidence was treated as failure, not presented as proof that hardware was CPU-only.
 
 Local evidence is retained under ignored `docs/agent_context/inference-lab/`: model acquisition checksum receipt and per-run JSON/log files. No credentials are included; model/runtime caches live outside the checkout.
+
+## T3: task usefulness suite and independent review
+
+```sh
+LD_LIBRARY_PATH=/home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu \
+venv/bin/python -m inference_lab suite \
+  --config experiments/qwen38-27b-q4.json --dataset experiments/tasks-v1.json \
+  --binary /home/ubuntu/.cache/inference-lab/runtime/llama-fa676981/build/bin/llama-server \
+  --model /home/ubuntu/.cache/inference-lab/models/Qwen3.8-27B-Q4_K_M.gguf \
+  --output-root docs/agent_context/inference-lab/runs
+```
+
+The six fixed cases cover two summaries, two exact JSON extractions and two Python questions. Each response is capped at192 new tokens, thinking disabled, within a1200-second suite cap. One model hash and one model load cover the whole suite. The run saves the exact dataset snapshot/hash, original prompts/responses, generation parameters, failure/truncation status and per-case evaluation. Each case gets its own immutable JSON plus a final run receipt and derived report.
+
+Execution completion is distinct from quality. JSON checks require exact keys, order where applicable, value types and values; extra prose, duplicate keys, incorrect types and truncation fail. Summary/code fact filters only flag candidates: they never mark manual quality pass. An independent reviewer reads actual responses and decides every source/semantic rubric criterion with a rationale. Pending review is not pass, and quality failures remain visible even if inference execution completed.
+
+Submit a JSON review using `python -m inference_lab review --run-dir RUN_DIR --review-file REVIEW_INPUT`. The review must name the reviewer and bind `run_id`, `run_sha256` (SHA-256 of immutable run.json bytes), and `dataset_sha256`; each manual case entry has `output_sha256` (UTF-8 content hash), a `rubric` mapping every criterion to a boolean, and a nonempty `rationale`. Failed, missing, empty or truncated responses cannot receive manual pass. The accepted review is appended once as `review.json`; original run/case evidence is not rewritten. `report.md` is a derived view and can be regenerated.
+
+Host load and competing workloads can affect timing. Until repeated baseline measurements are established, individual suite timings are descriptive observations only.
+
+### Verified first usefulness suite (2026-11-14)
+
+Run `20261114T053113Z-57fe28c22d` completed all six real GPU cases in183.06 seconds, with no truncated responses and cleanup confirmed. Both JSON extractions passed exact typed-value checks. An independent AI acceptor reviewed the four summary/code responses against every rubric item, bound that review to the exact run/dataset/output hashes, and independently executed the proposed Python repair. All six quality outcomes passed for these small fixtures. This is a limited usefulness sample, not a general model capability guarantee or repeated baseline. The review explicitly identifies AI review and does not claim human validation.

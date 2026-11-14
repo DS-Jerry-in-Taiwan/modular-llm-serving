@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import time
+import os
 import urllib.request
 
 
@@ -52,5 +53,6 @@ def acquire_model(config, destination, timeout=1800):
     result = verify_model(partial, model)
     if destination.exists():
         raise FileExistsError("destination appeared during download")
-    partial.rename(destination)
+    os.link(partial, destination)  # atomic no-replace publish on this filesystem
+    partial.unlink()
     return {**result, "path": str(destination.resolve()), "source_url": url}
