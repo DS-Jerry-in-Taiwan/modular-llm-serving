@@ -1,4 +1,4 @@
-import hashlib, json, tempfile, unittest
+import hashlib, json, math, tempfile, unittest
 from pathlib import Path
 from inference_lab.llmops import EvaluationGate, Registry, RegistryError
 from inference_lab.llmops.registry import manifest_digest
@@ -31,5 +31,25 @@ class GateTests(unittest.TestCase):
     def test_passes_only_verified_report(self): self.assertEqual(EvaluationGate(self.registry,max_gpu_bytes=200).evaluate("run-1",self.report()).status,"pass")
     def test_quality_latency_gpu_and_identity_failures_are_explicit(self):
         d=EvaluationGate(self.registry,min_quality=.9,max_latency_ratio=1,max_gpu_bytes=200).evaluate("run-1",self.report(quality_score=.5,latency_ratio=2,gpu_peak_bytes=300,provenance_status="pending",manifest_digest="bad")); self.assertEqual(d.status,"fail"); self.assertEqual(set(d.reasons),{"report identity does not match registered manifest","quality threshold failed","latency threshold failed","GPU threshold failed","provenance not verified"})
+
+    def test_missing_and_non_finite_metrics_fail_closed(self):
+        for field, value in (("latency_ratio", None), ("quality_score", math.nan),
+                             ("quality_score", math.inf), ("latency_ratio", math.nan),
+                             ("latency_ratio", math.inf), ("gpu_peak_bytes", math.nan),
+                             ("gpu_peak_bytes", math.inf)):
+            with self.subTest(field=field, value=value):
+                changes = {field: value}
+                if value is None:
+                    changes = {"latency_ratio": None}
+                decision = EvaluationGate(self.registry, max_gpu_bytes=200).evaluate("run-1", self.report(**changes))
+                self.assertEqual(decision.status, "fail")
+                expected = "invalid GPU peak" if field == "gpu_peak_bytes" else f"invalid {'quality score' if field == 'quality_score' else 'latency ratio'}"
+                self.assertIn(expected, decision.reasons)
+
+        report = self.report()
+        del report["latency_ratio"]
+        decision = EvaluationGate(self.registry).evaluate("run-1", report)
+        self.assertEqual(decision.status, "fail")
+        self.assertIn("invalid latency ratio", decision.reasons)
 
 if __name__=='__main__': unittest.main()

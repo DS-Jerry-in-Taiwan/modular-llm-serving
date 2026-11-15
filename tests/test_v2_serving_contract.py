@@ -1,4 +1,4 @@
-import unittest
+import threading, unittest
 from inference_lab.v2_contracts import *
 from inference_lab.serving import EngineState, ResidentSupervisor, SupervisorError
 
@@ -21,6 +21,13 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ValueError): ModelIdentity('qwen','rev','bad',10,'Q4')
 
 class SupervisorTests(unittest.TestCase):
+    def test_factory_failure_is_failed_and_does_not_retain_ownership(self):
+        def factory(): raise RuntimeError('factory failed')
+        s=ResidentSupervisor(factory)
+        with self.assertRaises(RuntimeError): s.start()
+        self.assertEqual(s.state,EngineState.FAILED)
+        with self.assertRaises(SupervisorError): s.require_ready()
+
     def test_exactly_one_ready_engine_and_idempotent_stop(self):
         engines=[]
         def factory():
@@ -39,5 +46,31 @@ class SupervisorTests(unittest.TestCase):
         e=Bad(); s=ResidentSupervisor(lambda:e); s.start()
         with self.assertRaises(RuntimeError): s.stop()
         self.assertEqual(s.state,EngineState.FAILED)
+
+    def test_concurrent_stop_waits_for_start_before_stopping(self):
+        started = threading.Event()
+        release_start = threading.Event()
+        stop_returned = threading.Event()
+
+        class SlowStart(FakeEngine):
+            def start(self):
+                started.set()
+                self.assert_start_released = release_start.wait(2)
+                if not self.assert_start_released: raise RuntimeError('start timed out')
+
+        e=SlowStart(); s=ResidentSupervisor(lambda:e)
+        start_thread = threading.Thread(target=s.start)
+        start_thread.start()
+        self.assertTrue(started.wait(2))
+        stop_thread = threading.Thread(target=lambda: (s.stop(), stop_returned.set()))
+        stop_thread.start()
+        self.assertFalse(stop_returned.wait(.05))
+        release_start.set()
+        start_thread.join(2); stop_thread.join(2)
+        self.assertFalse(start_thread.is_alive())
+        self.assertFalse(stop_thread.is_alive())
+        self.assertTrue(stop_returned.is_set())
+        self.assertEqual(e.stopped,1)
+        self.assertEqual(s.state,EngineState.STOPPED)
 
 if __name__=='__main__': unittest.main()

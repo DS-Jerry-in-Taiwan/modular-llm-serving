@@ -32,19 +32,22 @@ class ResidentSupervisor:
         with self._lock:
             if self._state is EngineState.READY: return
             if self._state in {EngineState.STARTING, EngineState.STOPPING}: raise SupervisorError("engine transition in progress")
-            self._state = EngineState.STARTING; engine = self._factory()
-            if self._engine is not None: raise SupervisorError("owned engine already exists")
-            self._engine = engine
-        try:
-            engine.start()
-            if not engine.ready(): raise SupervisorError("engine is not ready")
-        except Exception:
-            with self._lock: self._state = EngineState.FAILED
-            try: engine.stop()
-            finally:
-                with self._lock: self._engine = None
-            raise
-        with self._lock: self._state = EngineState.READY
+            self._state = EngineState.STARTING
+            engine = None
+            try:
+                engine = self._factory()
+                if self._engine is not None: raise SupervisorError("owned engine already exists")
+                self._engine = engine
+                engine.start()
+                if not engine.ready(): raise SupervisorError("engine is not ready")
+                self._state = EngineState.READY
+            except Exception:
+                self._state = EngineState.FAILED
+                try:
+                    if engine is not None: engine.stop()
+                finally:
+                    self._engine = None
+                raise
 
     def require_ready(self) -> Engine:
         with self._lock:
@@ -56,9 +59,9 @@ class ResidentSupervisor:
             if self._state is EngineState.STOPPED: return
             if self._state is EngineState.STOPPING: return
             engine = self._engine; self._state = EngineState.STOPPING
-        try:
-            if engine is not None: engine.stop()
-        except Exception:
-            with self._lock: self._state = EngineState.FAILED
-            raise
-        with self._lock: self._engine = None; self._state = EngineState.STOPPED
+            try:
+                if engine is not None: engine.stop()
+            except Exception:
+                self._state = EngineState.FAILED
+                raise
+            self._engine = None; self._state = EngineState.STOPPED
