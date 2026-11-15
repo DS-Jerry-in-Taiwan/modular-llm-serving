@@ -70,12 +70,48 @@ class StreamEvent:
         _id(self.request_id, "request_id"); _id(self.run_id, "run_id")
         if type(self.sequence) is not int or self.sequence < 0 or self.kind not in {"chunk", "terminal", "error"}:
             raise ValueError("invalid stream event")
+        if not isinstance(self.text, str):
+            raise ValueError("stream event text must be a string")
+        if self.kind == "chunk" and self.error is not None:
+            raise ValueError("chunk event cannot contain error")
         if self.kind == "terminal" and self.error is not None: raise ValueError("terminal event cannot contain error")
+        if self.kind == "terminal" and self.text: raise ValueError("terminal event cannot contain text")
         if self.kind == "error" and self.error is None: raise ValueError("error event needs error envelope")
+        if self.kind == "error" and self.text: raise ValueError("error event cannot contain text")
+        if self.error is not None and not isinstance(self.error, ErrorEnvelope):
+            raise ValueError("stream event error must be an ErrorEnvelope")
         if self.contract_version != CONTRACT_VERSION: raise ValueError("invalid stream contract")
 
     def to_dict(self) -> dict[str, Any]:
-        value = asdict(self); return value
+        # Keep the public wire shape explicit.  In particular, this must never grow
+        # request/prompt, credentials, exception, or provider-specific fields.
+        return {
+            "request_id": self.request_id,
+            "run_id": self.run_id,
+            "sequence": self.sequence,
+            "kind": self.kind,
+            "text": self.text,
+            "error": self.error.to_dict() if self.error is not None else None,
+            "contract_version": self.contract_version,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "StreamEvent":
+        """Parse one strict public event without accepting private payload fields."""
+        if not isinstance(value, dict):
+            raise ValueError("stream event must be an object")
+        expected = {"request_id", "run_id", "sequence", "kind", "text", "error", "contract_version"}
+        if set(value) != expected:
+            raise ValueError("malformed stream event fields")
+        error = value["error"]
+        if error is not None:
+            if not isinstance(error, dict):
+                raise ValueError("malformed stream error")
+            error_expected = {"code", "message", "request_id", "retryable", "contract_version"}
+            if set(error) != error_expected:
+                raise ValueError("malformed stream error fields")
+            error = ErrorEnvelope(**error)
+        return cls(error=error, **{key: value[key] for key in expected if key != "error"})
 
 
 @dataclass(frozen=True)
