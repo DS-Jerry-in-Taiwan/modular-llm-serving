@@ -59,6 +59,18 @@ class StreamingContractTests(unittest.TestCase):
         self.assertEqual(events[0].error.code, "CLIENT_DISCONNECTED")
         self.assertEqual(len(cleanup), 1)
 
+    def test_close_before_first_next_calls_hook_once(self):
+        cleanup = []
+        stream = stream_events(
+            ["never consumed"], "req-1", "run-1",
+            on_cancel=lambda: cleanup.append(True),
+        )
+
+        stream.close()
+        stream.close()
+
+        self.assertEqual(cleanup, [True])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -63,6 +63,18 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(engine.calls, 0)
         self.assertEqual(queue.queued, 0)
 
+    def test_nonfinite_deadline_rejected_before_admission(self):
+        engine = FakeEngine()
+        queue, supervisor = self.make_queue(engine, max_queue=2)
+
+        for index, deadline in enumerate((float("nan"), float("inf"), float("-inf"))):
+            with self.assertRaisesRegex(ValueError, "finite"):
+                queue.submit(request(f"nonfinite-{index}"), deadline=deadline)
+
+        self.assertEqual(supervisor.state.value, "stopped")
+        self.assertEqual(queue.queued, 0)
+        self.assertIsNone(queue.active)
+
     def test_queue_is_fifo_and_rejects_beyond_bound(self):
         engine = FakeEngine(block=True)
         queue, _ = self.make_queue(engine, max_queue=1)

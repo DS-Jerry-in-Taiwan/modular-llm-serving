@@ -31,6 +31,25 @@ class CancellationToken:
         return self._event.is_set()
 
 
+class _StreamIterator:
+    """Closable iterator that can release work before its first ``next``."""
+
+    def __init__(self, adapter: "StreamAdapter") -> None:
+        self._adapter = adapter
+        self._generator = adapter._iter_events()
+
+    def __iter__(self) -> "_StreamIterator":
+        return self
+
+    def __next__(self) -> StreamEvent:
+        return next(self._generator)
+
+    def close(self) -> None:
+        if not self._adapter._terminal:
+            self._adapter.cancel()
+        self._generator.close()
+
+
 def _controlled_error(code: str, request_id: str, *, retryable: bool = False) -> ErrorEnvelope:
     # Do not include source exception text: it may contain prompts or credentials.
     messages = {
@@ -142,6 +161,9 @@ class StreamAdapter:
         return self._event("terminal")
 
     def __iter__(self) -> Iterator[StreamEvent]:
+        return _StreamIterator(self)
+
+    def _iter_events(self) -> Iterator[StreamEvent]:
         if self._terminal:
             return
         try:

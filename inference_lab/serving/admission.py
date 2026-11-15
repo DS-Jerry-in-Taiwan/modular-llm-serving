@@ -18,6 +18,7 @@ from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 import inspect
+import math
 import threading
 import time
 from typing import Any, Callable, Deque
@@ -252,6 +253,8 @@ class AdmissionQueue:
             deadline = self.clock() + timeout
         if deadline is not None and (isinstance(deadline, bool) or not isinstance(deadline, (int, float))):
             raise ValueError("deadline must be a monotonic timestamp")
+        if deadline is not None and not math.isfinite(deadline):
+            raise ValueError("deadline must be a finite monotonic timestamp")
 
         fingerprint = self._fingerprint(request)
         with self._condition:
