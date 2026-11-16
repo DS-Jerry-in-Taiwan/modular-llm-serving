@@ -47,42 +47,69 @@ V2 目前不包含 Kubernetes、autoscaling、multi-GPU、dynamic batching 或�
 
 ```mermaid
 flowchart LR
-  User[使用者 / CLI / Browser]
-  Demo[V1/V2 Loopback Demo]
-  Eval[Evaluation & LLMOps]
-  V1[V1 Cold Runner\n每次建立 llama-server]
-  V2[V2 Resident Service\n單一常駐 engine]
-  Queue[AdmissionQueue\nFIFO / budget / idempotency]
-  Supervisor[ResidentSupervisor\nstart / ready / stop]
-  Runtime[llama.cpp llama-server\nLocalServer adapter]
-  Store[(SQLite DurableJobStore)]
-  Obs[Observability\nJSONL events / metrics / redaction]
-  Evidence[(Local Evidence\nmanifest / response / reports)]
-  Modal[Modal + Gemma legacy path]
+  subgraph INFERENCE[Inference Pipeline]
+    Client[CLI / Browser / API client]
+    API[web.server\nHTTP boundary]
+    Contract[V2 contracts\nrequest / response / stream]
+    V1[V1 cold runner\nper-job llama-server]
+    Queue[AdmissionQueue\nFIFO / budget / idempotency]
+    Supervisor[ResidentSupervisor\nstart / ready / stop]
+    Runtime[llama.cpp llama-server\nLocalServer adapter]
+    Response[Response / StreamEvent]
+    Durable[(DurableJobStore)]
+    Observe[Observability\nevents / metrics / redaction]
 
-  User --> Demo
-  User --> Eval
-  Demo --> V1
-  Demo --> V2
-  Eval --> V1
-  V1 --> Runtime
-  V2 --> Queue --> Supervisor --> Runtime
-  V2 --> Store
-  V2 --> Obs
-  V1 --> Evidence
-  Eval --> Evidence
-  Store --> Evidence
-  Modal -. preserved separately .-> User
+    Client --> API
+    API --> Contract
+    Contract --> Queue
+    API --> V1
+    V1 --> Runtime
+    Queue --> Supervisor --> Runtime
+    Runtime --> Response --> Client
+    Queue --> Durable
+    Runtime --> Observe
+  end
+
+  subgraph EVALUATION[Evaluation Pipeline]
+    Dataset[Versioned dataset]
+    Config[Experiment config]
+    Runner[Evaluation runner]
+    Adapter[Inference adapter\nV1 cold or V2 resident]
+    Evidence[(Immutable run evidence)]
+    Scorer[Quality / performance evaluator]
+    Compare[Baseline comparison]
+    Gate[LLMOps evaluation gate]
+    Registry[(Run registry / lineage)]
+
+    Dataset --> Runner
+    Config --> Runner
+    Runner --> Adapter
+    Adapter --> Evidence
+    Evidence --> Scorer --> Compare --> Gate --> Registry
+  end
+
+  subgraph SHARED[Shared contracts and artifacts]
+    Identity[Model / runtime / dataset identity]
+    Reports[Reports / provenance]
+  end
+
+  Runner --> Identity
+  Contract --> Adapter
+  Durable --> Evidence
+  Observe --> Evidence
+  Gate --> Reports
+  Modal[Modal + Gemma legacy path]
+  ModalRuntime[Modal llama-server image]
+  Modal -. independent deployment contract .-> ModalRuntime
 ```
 
-### 邊界怎麼看？
+### Pipeline 邊界
 
-- **Browser / CLI** 是輸入端，不直接控制模型程序。
-- **Demo/API** 負責 HTTP 邊界、請求格式、loopback 安全與 UI 狀態呈現。
-- **V1** 追求可重現比較；每個 variant 都有獨立 process、資源取樣與清理證據。
-- **V2** 追求服務化；`ResidentSupervisor` 管一個 engine，`AdmissionQueue` 控制請求何時進入 engine。
-- **Evaluation/LLMOps** 讀取已完成的 evidence，不混入任意 live prompt 的品質宣稱。
-- **Modal path** 是既有部署驗證契約，不能與本機 Qwen 服務混為同一個 runtime。
+- **Inference Pipeline** 負責接收請求、驗證 contract、排隊、啟動或重用 engine、產生 response/stream，以及寫入 durable state 與 observability events。
+- **Evaluation Pipeline** 負責載入 dataset/config、呼叫 inference adapter、保存 immutable evidence、評估品質與效能、執行 baseline comparison，最後交給 LLMOps gate。
+- **Shared contracts and artifacts** 傳遞 model/runtime/dataset identity、evidence digest、reports 與 provenance；兩條 pipeline 透過資料契約整合，不互相匯入內部 lifecycle。
+- **V1 cold** 與 **V2 resident** 都可以被 evaluation adapter 呼叫，但 V1/V2 使用不同的 HTTP/request contract。
+- **Modal + Gemma** 維持獨立 deployment contract，不參與本機 Qwen evaluation pipeline。
 
 ## 3. 流程循序圖
 
