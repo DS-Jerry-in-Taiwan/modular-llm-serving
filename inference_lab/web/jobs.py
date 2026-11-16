@@ -361,7 +361,10 @@ class ResidentDemoManager:
             self.identity_worker = None
 
     def _default_factory(self):
-        directory = self.output_root / "resident-engine"
+        # Each resident engine owns a fresh evidence directory.  LocalServer
+        # writes server.log exclusively, so reusing one directory would make a
+        # later service restart fail before the engine can become ready.
+        directory = self.output_root / "resident-engine" / f"instance-{uuid.uuid4().hex}"
         directory.mkdir(parents=True, exist_ok=True)
         return _ResidentLocalEngine(self.binary, self.model, self.config["runtime"],
                                     directory, time.monotonic() + self.request_timeout)
