@@ -32,6 +32,13 @@ class FakeResidentEngine:
         return {"content": "hello"}
 
 
+class FailingStreamEngine(FakeResidentEngine):
+    def generate(self, request, cancellation):
+        if request.stream:
+            raise RuntimeError("prompt=private credential=secret")
+        return super().generate(request, cancellation)
+
+
 class ResidentAPITests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -86,6 +93,35 @@ class ResidentAPITests(unittest.TestCase):
         result = self.wait_terminal(request_id)
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(self.manager.store.get(request_id).state, "cancelled")
+
+    def test_stream_runner_failure_publishes_controlled_error_and_terminal(self):
+        self.manager.shutdown()
+        self.manager = ResidentDemoManager(
+            "unused", "unused", self.temp.name, {
+                "model": {"filename": "qwen.gguf"},
+                "runtime": {"revision": "a" * 40, "context_size": 128},
+            }, engine_factory=FailingStreamEngine, verify_async=False,
+            source_commit="b" * 40, max_queue=2,
+        )
+        request_id = self.manager.submit({"request_id": "stream-failure", "prompt": "private", "max_new_tokens": 4, "stream": True})
+        result = self.wait_terminal(request_id)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual([event["kind"] for event in result["events"]], ["error", "terminal"])
+        self.assertEqual(result["events"][0]["error"]["code"], "STREAM_FAILED")
+        wire = str(result)
+        self.assertNotIn("private", wire)
+        self.assertNotIn("secret", wire)
+
+    def test_stream_active_cancellation_publishes_terminal_after_cleanup(self):
+        FakeResidentEngine.entered = threading.Event()
+        request_id = self.manager.submit({"request_id": "stream-cancel", "prompt": "wait", "max_new_tokens": 4, "stream": True})
+        self.assertTrue(FakeResidentEngine.entered.wait(1))
+        self.assertTrue(self.manager.cancel(request_id))
+        self.assertFalse(self.manager.cancel(request_id))
+        result = self.wait_terminal(request_id)
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual([event["kind"] for event in result["events"]], ["error", "terminal"])
+        self.assertEqual(result["events"][0]["error"]["code"], "CLIENT_DISCONNECTED")
 
 
 if __name__ == "__main__":
