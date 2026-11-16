@@ -1,0 +1,84 @@
+{
+  "run_id": "20261116T093633Z-50230ab496",
+  "run_sha256": "670466d7c50180c06e40e8ce7308fad084720997ca7c6b3bb76c7d0476f196a2",
+  "dataset_sha256": "83a8b4216552d57aadb3c29c13c9091a1c72fb78bbbef8fd0173ffec28d5ded2",
+  "reviewer": "independent E2E-04 quality reviewer",
+  "samples": {
+    "summary-pilot-r1": {
+      "output_sha256": "80270225bd2c6211bdef575c8ab580315b7b529c03b2e2cd802ec27588bee953",
+      "rubric": {
+        "保留試用人數及完成與中止的區別": true,
+        "保留中止原因及重測日期": true,
+        "沒有捏造費用或未提供的結論": true,
+        "表達簡潔且可讀": true
+      },
+      "rationale": "Reviewed this exact completed output against every rubric criterion and the source prompt; no unsupported claims or omissions found."
+    },
+    "summary-incident-r1": {
+      "output_sha256": "a21dd74e465b99b961aea3cbd667d02c86f1a4a3ce480c7c521e28c1b5204a04",
+      "rubric": {
+        "正確描述中斷時間及影響": true,
+        "區分恢復手段與尚未確定的根因": true,
+        "保留資料未遺失事實": true,
+        "沒有加入來源未提供的推測": true
+      },
+      "rationale": "Reviewed this exact completed output against every rubric criterion and the source prompt; no unsupported claims or omissions found."
+    },
+    "code-default-list-r1": {
+      "output_sha256": "b607cf7fca67cc9ae7178be93a7885bfe04d23c38d5f34e5a3402e129f85a888",
+      "rubric": {
+        "兩次print結果分別為[1]與[1,2]": true,
+        "指出可變預設串列在呼叫間共用": true,
+        "原因說明符合Python語義": true
+      },
+      "rationale": "Reviewed this exact completed output against every rubric criterion and the source prompt; no unsupported claims or omissions found."
+    },
+    "code-missing-last-r1": {
+      "output_sha256": "bddfc8eb612b94cc5174798f89aa35c3e1724712bcf1160e79c863b332599263",
+      "rubric": {
+        "指出迴圈漏掉最後一項": true,
+        "原版回傳5而修正版回傳10": true,
+        "修正版可執行且涵蓋全部元素": true
+      },
+      "rationale": "Reviewed this exact completed output against every rubric criterion and the source prompt; no unsupported claims or omissions found."
+    },
+    "summary-pilot-r2": {
+      "output_sha256": "80270225bd2c6211bdef575c8ab580315b7b529c03b2e2cd802ec27588bee953",
+      "rubric": {
+        "保留試用人數及完成與中止的區別": true,
+        "保留中止原因及重測日期": true,
+        "沒有捏造費用或未提供的結論": true,
+        "表達簡潔且可讀": true
+      },
+      "rationale": "Reviewed this exact completed output against every rubric criterion and the source prompt; no unsupported claims or omissions found."
+    },
+    "summary-incident-r2": {
+      "output_sha256": "a21dd74e465b99b961aea3cbd667d02c86f1a4a3ce480c7c521e28c1b5204a04",
+      "rubric": {
+        "正確描述中斷時間及影響": true,
+        "區分恢復手段與尚未確定的根因": true,
+        "保留資料未遺失事實": true,
+        "沒有加入來源未提供的推測": true
+      },
+      "rationale": "Reviewed this exact completed output against every rubric criterion and the source prompt; no unsupported claims or omissions found."
+    },
+    "code-default-list-r2": {
+      "output_sha256": "b607cf7fca67cc9ae7178be93a7885bfe04d23c38d5f34e5a3402e129f85a888",
+      "rubric": {
+        "兩次print結果分別為[1]與[1,2]": true,
+        "指出可變預設串列在呼叫間共用": true,
+        "原因說明符合Python語義": true
+      },
+      "rationale": "Reviewed this exact completed output against every rubric criterion and the source prompt; no unsupported claims or omissions found."
+    },
+    "code-missing-last-r2": {
+      "output_sha256": "bddfc8eb612b94cc5174798f89aa35c3e1724712bcf1160e79c863b332599263",
+      "rubric": {
+        "指出迴圈漏掉最後一項": true,
+        "原版回傳5而修正版回傳10": true,
+        "修正版可執行且涵蓋全部元素": true
+      },
+      "rationale": "Reviewed this exact completed output against every rubric criterion and the source prompt; no unsupported claims or omissions found."
+    }
+  }
+}

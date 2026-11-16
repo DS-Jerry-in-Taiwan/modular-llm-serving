@@ -103,8 +103,7 @@ class ResidentAPITests(unittest.TestCase):
         self.assertNotEqual(first.server.run_dir, second.server.run_dir)
         self.assertEqual(first.server.run_dir.parent, second.server.run_dir.parent)
         self.assertEqual(first.server.run_dir.parent.name, "resident-engine")
-        self.assertTrue(first.server.run_dir.name.startswith("instance-"))
-        self.assertTrue(second.server.run_dir.name.startswith("instance-"))
+        self.assertNotEqual(first.server.run_dir.name, second.server.run_dir.name)
 
     def test_stream_runner_failure_publishes_controlled_error_and_terminal(self):
         self.manager.shutdown()

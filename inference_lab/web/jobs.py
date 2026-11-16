@@ -13,11 +13,12 @@ import uuid
 from ..acquisition import verify_model
 from ..telemetry import ResourceSampler, response_metrics, gpu_probe
 from ..runtime import LocalServer, RuntimeFailure, RunCancelled, runtime_identity
-from ..artifacts import write_json_new
+from ..artifacts import new_run, write_json_new
 from ..llmops.durable import DurableJobStore, EvidenceRef, DurableJobError
 from ..serving import InMemoryEventSink, ObservationRecorder, ResidentSupervisor, stream_events
 from ..serving.admission import AdmissionQueue, AdmissionRejected, AdmissionStatus
 from ..v2_contracts import ErrorEnvelope, InferenceRequest, InferenceResponse
+from ..v2_metrics import ResidentRequestMeasurement
 
 LIMITS = {"max_prompt_chars": 3000, "min_tokens": 16, "max_tokens": 256}
 EXAMPLES = [
@@ -343,6 +344,7 @@ class ResidentDemoManager:
             self.store.recover()
         self.lock = threading.RLock()
         self.handles, self.observations, self.deadlines = {}, {}, {}
+        self._measurements, self._measurement_samples = {}, {}
         # A stream runner can fail before it has a value for the admission
         # result.  Keep its already-sanitized wire events until cleanup has
         # published the durable terminal state; never retain the raw error.
@@ -361,11 +363,11 @@ class ResidentDemoManager:
             self.identity_worker = None
 
     def _default_factory(self):
-        # Each resident engine owns a fresh evidence directory.  LocalServer
-        # writes server.log exclusively, so reusing one directory would make a
-        # later service restart fail before the engine can become ready.
-        directory = self.output_root / "resident-engine" / f"instance-{uuid.uuid4().hex}"
-        directory.mkdir(parents=True, exist_ok=True)
+        # Allocate one immutable evidence directory per engine instance.  A
+        # stopped engine's server.log must remain available for inspection;
+        # reusing a fixed directory would make LocalServer's exclusive log
+        # creation fail on the next service start.
+        directory, _ = new_run(self.output_root / "resident-engine", "resident-engine")
         return _ResidentLocalEngine(self.binary, self.model, self.config["runtime"],
                                     directory, time.monotonic() + self.request_timeout)
 
@@ -408,6 +410,9 @@ class ResidentDemoManager:
         metadata = record.metadata
         if "response" in metadata:
             result["response"] = copy.deepcopy(metadata["response"])
+        for key in ("metrics", "resources", "evidence_schema_version"):
+            if key in metadata:
+                result[key] = copy.deepcopy(metadata[key])
         if "events" in metadata:
             result["events"] = copy.deepcopy(metadata["events"])
         if record.terminal_record and record.terminal_record.get("error"):
@@ -543,7 +548,10 @@ class ResidentDemoManager:
             self.store.transition(request.request_id, "running", reason="admitted")
         observation.queue_complete()
         observation.generation_start()
+        measurement = ResidentRequestMeasurement()
+        result = None
         try:
+            measurement.start(engine)
             result = engine.generate(request, cancellation)
             text_value, chunks = self._result_chunks(result)
         except BaseException as exc:
@@ -565,6 +573,25 @@ class ResidentDemoManager:
                 with self.lock:
                     self.stream_failures[request.request_id] = events
             raise
+        finally:
+            # Keep request timing separate from resident engine startup.  A
+            # missing provider timing remains explicitly unavailable.
+            try:
+                evidence = measurement.finish(result)
+                samples = measurement.samples()
+            except Exception as exc:
+                evidence = {
+                    "schema_version": 1,
+                    "resources": {"status": "unavailable", "reason": type(exc).__name__},
+                    "response_metrics": {
+                        "request_seconds": {"status": "unavailable", "reason": "measurement failed"},
+                        "generated_tokens_per_second": {"status": "unavailable", "reason": "measurement failed"},
+                    },
+                }
+                samples = []
+            with self.lock:
+                self._measurements[request.request_id] = evidence
+                self._measurement_samples[request.request_id] = samples
         if request.stream:
             events = list(stream_events(chunks, request.request_id, request.request_id,
                                         cancellation=cancellation.is_set,
@@ -611,6 +638,12 @@ class ResidentDemoManager:
         metadata = dict(existing.metadata) if existing else {}
         with self.lock:
             failed_events = self.stream_failures.pop(request.request_id, None)
+            measurement = self._measurements.pop(request.request_id, None)
+            measurement_samples = self._measurement_samples.pop(request.request_id, None)
+        if measurement is not None:
+            metadata["evidence_schema_version"] = measurement["schema_version"]
+            metadata["metrics"] = measurement["response_metrics"]
+            metadata["resources"] = measurement["resources"]
         if value is not None and isinstance(value, dict):
             text_value = value.get("text", "")
             if "events" in value:
@@ -631,6 +664,9 @@ class ResidentDemoManager:
                 directory.mkdir(parents=True, exist_ok=True)
                 evidence_path = directory / "response.json"
                 evidence_path.write_text(json.dumps(metadata, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+                if measurement_samples is not None:
+                    (directory / "resource-samples.json").write_text(
+                        json.dumps(measurement_samples, ensure_ascii=False, sort_keys=True), encoding="utf-8")
                 digest = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
                 evidence = EvidenceRef(str(evidence_path), digest, self.source_commit)
                 with self.db_lock:
