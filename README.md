@@ -1,13 +1,27 @@
 # Modular LLM Serving：本機推論與可復用服務
 
-目前正式版本是 **v2.0.0 — Serviceable Inference**。這個 repository 以單機、單張 GPU 為主要驗證場景，保留可重現的 Qwen3.8-27B GGUF 實驗，同時提供可持續開發的 V2 resident inference service。
+這是一個「把本機模型跑法整理成可重跑、可比較、可持續開發服務」的 LLM inference lab。它以單機、單張 GPU 為主要驗證場景，使用 Qwen3.8-27B GGUF 與 pinned llama.cpp runtime。
 
-系統有兩條清楚分開的路徑：
+如果只想先抓住重點：**V1 用來做公平的冷啟動比較，V2 用來做可重複呼叫的常駐推論服務；兩者共用模型與 runtime 驗證，但不共用請求協定。**
 
-- **V1 cold benchmark**：每次工作建立並清理自己的 `llama-server`，用來比較 24/40 GPU layers 的固定測試結果。
-- **V2 resident service**：啟動一次模型並重複服務請求，加入 admission、取消、deadline、streaming、durable job 與 observability。
+## 版本與發布狀態
 
-原本的 Modal + Gemma smoke/deployment path 仍保留，與本機 Qwen 路徑分開。V2 目前聚焦文字推論服務，不包含 Kubernetes、autoscaling、multi-GPU、dynamic batching 或多模態生成。
+| 版本 | 定位 | 目前狀態 |
+| --- | --- | --- |
+| `v2.0.0` | Serviceable Inference：V2 resident service、durable jobs、observability、LLMOps gate 與 Demo/API 整合 | 目前正式版本 |
+| `v1.0.0` | Local Inference Lab V1：Qwen baseline、24/40 GPU layers 比較與 cold Demo | 已發布、保留相容 |
+| Modal/Gemma path | 原有 Modal + Gemma smoke/deployment validation | 保留的獨立 legacy path |
+
+版本 tag 與 release notes 見 [GitHub Releases](https://github.com/DS-Jerry-in-Taiwan/modular-llm-serving/releases)。V2 目前聚焦文字推論服務，尚未涵蓋 Kubernetes、autoscaling、multi-GPU、dynamic batching 或多模態生成。
+
+## 先用白話理解
+
+- **V1 像實驗室的碼表**：每次測試都重新啟動自己的 `llama-server`，跑固定題目，再關閉並保存結果。這樣可以比較 24 層 GPU offload 和 40 層 GPU offload 的差異。
+- **V2 像一台已開機的服務櫃台**：模型只啟動一次，之後多個請求排隊進來。服務會記住每個請求的 ID、狀態、取消結果與證據。
+- **AdmissionQueue 像入口管制**：它限制同時進來的工作、檢查 token/context 預算，並處理 FIFO、idempotency、deadline 與 cancellation。
+- **DurableJobStore 像工作簿**：即使程序重啟，也能知道哪些工作曾經進來、最後停在哪個狀態；它不會假裝把中斷的 generation 接著跑完。
+- **Observability 像飛行記錄器**：保存 queue、generation、stream、cleanup、terminal 等事件，但不把 prompt、credential 或 runtime 私密資料送到 public API。
+- **LLMOps gate 像驗收門**：只有 identity、evidence、metrics 與 provenance 都符合規則，結果才可以被視為可接受的實驗或版本證據。
 
 ## 1. 簡介
 
@@ -20,13 +34,15 @@
 3. 用 V2 resident service 將同一個推論 runtime 變成可重複呼叫的服務。
 4. 將每次請求的狀態、事件、證據與 provenance 保存下來，讓後續 LLMOps gate 可以檢查。
 
-### 目前版本與驗收
+### 這個專案目前做到哪裡？
 
 - V2 foundation：38/38 targeted tests
 - V2 Demo/API integration：7/7 tests
 - 完整回歸：182/182 tests
 - Python compilation、JavaScript syntax、diff checks 通過
 - `v2.0.0` 已發布；本版本沒有宣稱已完成實體 GPU 推論，GPU 相容性仍須在目標環境驗證
+
+換句話說，測試已證明「模組之間的流程和失敗處理可以工作」，但還不能代替你在實際 12GB GPU 上執行 Qwen3.8-27B 的效能測試。真正的 GPU throughput、VRAM/RAM 使用量和可用 context size，仍要在你的硬體與 driver 上跑 V1/V2 實驗取得。
 
 ## 2. 高階架構
 
