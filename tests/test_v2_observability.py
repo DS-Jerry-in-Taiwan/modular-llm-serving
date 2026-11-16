@@ -92,6 +92,8 @@ class V2ObservabilityTests(unittest.TestCase):
         with self.assertRaises(MalformedMetrics):
             MetricsSnapshot(total_seconds=float("nan"))
         with self.assertRaises(MalformedMetrics):
+            MetricsSnapshot(total_seconds=10**400)
+        with self.assertRaises(MalformedMetrics):
             MetricsSnapshot.from_dict({"total_seconds": 1, "uncontrolled_prompt": "secret"})
         with self.assertRaises(MalformedMetrics):
             MetricsSnapshot(prompt_tokens=2, completion_tokens=3, total_tokens=99)

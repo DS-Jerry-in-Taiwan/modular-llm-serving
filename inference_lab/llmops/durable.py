@@ -364,4 +364,3 @@ class DurableJobStore:
         return recovered
 
     recover_incomplete = recover
-

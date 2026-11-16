@@ -64,7 +64,11 @@ def _number(value: Any, name: str, *, integer: bool = False, maximum: float | No
         raise MalformedMetrics(f"{name} must be a number")
     if integer and type(value) is not int:
         raise MalformedMetrics(f"{name} must be an integer")
-    if not math.isfinite(value) or value < 0:
+    try:
+        finite = math.isfinite(value)
+    except OverflowError as exc:
+        raise MalformedMetrics(f"{name} must be finite and non-negative") from exc
+    if not finite or value < 0:
         raise MalformedMetrics(f"{name} must be finite and non-negative")
     if maximum is not None and value > maximum:
         raise MalformedMetrics(f"{name} exceeds its bound")
