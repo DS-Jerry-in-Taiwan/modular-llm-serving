@@ -343,6 +343,10 @@ class ResidentDemoManager:
             self.store.recover()
         self.lock = threading.RLock()
         self.handles, self.observations, self.deadlines = {}, {}, {}
+        # A stream runner can fail before it has a value for the admission
+        # result.  Keep its already-sanitized wire events until cleanup has
+        # published the durable terminal state; never retain the raw error.
+        self.stream_failures = {}
         self.closing = False
         self.status, self.error, self.identity = ("checking" if verify_async else "ready"), None, None
         self.engine_factory = engine_factory or self._default_factory
@@ -536,8 +540,28 @@ class ResidentDemoManager:
             self.store.transition(request.request_id, "running", reason="admitted")
         observation.queue_complete()
         observation.generation_start()
-        result = engine.generate(request, cancellation)
-        text_value, chunks = self._result_chunks(result)
+        try:
+            result = engine.generate(request, cancellation)
+            text_value, chunks = self._result_chunks(result)
+        except BaseException as exc:
+            if request.stream:
+                # Convert a runner failure (including cooperative cancellation)
+                # into the same bounded stream protocol as a source failure.
+                # The exception itself remains private to the admission result.
+                def failed_source(failure=exc):
+                    if cancellation.is_set():
+                        return
+                    yield from ()
+                    raise failure
+
+                events = list(stream_events(
+                    failed_source(), request.request_id, request.request_id,
+                    cancellation=cancellation.is_set,
+                    on_cancel=cancellation.set,
+                ))
+                with self.lock:
+                    self.stream_failures[request.request_id] = events
+            raise
         if request.stream:
             events = list(stream_events(chunks, request.request_id, request.request_id,
                                         cancellation=cancellation.is_set,
@@ -582,14 +606,18 @@ class ResidentDemoManager:
         with self.db_lock:
             existing = self.store.get(request.request_id)
         metadata = dict(existing.metadata) if existing else {}
+        with self.lock:
+            failed_events = self.stream_failures.pop(request.request_id, None)
         if value is not None and isinstance(value, dict):
             text_value = value.get("text", "")
+            if "events" in value:
+                metadata["events"] = value["events"]
             if status == "completed":
                 response = InferenceResponse(request.request_id, request.request_id, request.model_id,
                                              text_value, "stop").to_dict()
                 metadata["response"] = response
-                if "events" in value:
-                    metadata["events"] = value["events"]
+        if failed_events is not None:
+            metadata["events"] = [event.to_dict() for event in failed_events]
         if observation is not None:
             observation.cleanup_complete()
             error_envelope = self._error(code, reason, request.request_id, retryable=(status == "failed")) if code else None
@@ -614,6 +642,15 @@ class ResidentDemoManager:
                     self.store.transition(request.request_id, status, reason=reason,
                                           provenance={"source_commit": self.source_commit,
                                                       "error": terminal["error"]})
+                    # Stream error/terminal events are part of the public
+                    # terminal record even when the runner failed or was
+                    # cancelled.  Persist them after the state transition so
+                    # readers never observe an active row with terminal data.
+                    self.store._connection.execute(
+                        "UPDATE jobs SET metadata_json=? WHERE job_id=?",
+                        (json.dumps(metadata, ensure_ascii=False, sort_keys=True), request.request_id),
+                    )
+                    self.store._connection.commit()
                 # Keep the public error in the manager's in-memory sidecar;
                 # durable transition remains the authoritative state machine.
                 with self.lock:
