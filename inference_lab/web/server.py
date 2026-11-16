@@ -13,7 +13,7 @@ import threading
 from urllib.parse import urlsplit
 
 from ..config import load_config
-from .jobs import DemoManager
+from .jobs import DemoManager, ResidentDemoManager
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -141,12 +141,21 @@ def handler_for(manager, static_root=None):
             path = urlsplit(self.path).path
             if path == "/api/info":
                 return self.send_data(200, manager.info())
+            if path == "/api/v2/info":
+                if getattr(manager, "mode", "cold") != "resident":
+                    return self.send_data(404, {"error": "Resident API is not enabled."})
+                return self.send_data(200, manager.info())
             if path == "/api/reference":
                 return self.send_data(200, reference_info())
             if path == "/api/history":
                 return self.send_data(200, manager.history())
             if path.startswith("/api/runs/"):
                 job = manager.get(path.removeprefix("/api/runs/"))
+                return self.send_data(200 if job else 404, job or {"error": "Run not found."})
+            if path.startswith("/api/v2/runs/"):
+                if getattr(manager, "mode", "cold") != "resident":
+                    return self.send_data(404, {"error": "Resident API is not enabled."})
+                job = manager.get(path.removeprefix("/api/v2/runs/"))
                 return self.send_data(200 if job else 404, job or {"error": "Run not found."})
             if path == "/reference":
                 try:
@@ -195,6 +204,27 @@ def handler_for(manager, static_root=None):
                     return self.send_data(503, {"error": "Model verification is not ready."})
                 except OSError:
                     return self.send_data(500, {"error": "Could not create local evidence."})
+            if path == "/api/v2/runs":
+                if getattr(manager, "mode", "cold") != "resident":
+                    return self.send_data(404, {"error": "Resident API is not enabled."})
+                try:
+                    request_id = manager.submit(payload)
+                    return self.send_data(202, {"id": request_id, "request_id": request_id,
+                                                "run_id": request_id, "mode": "resident",
+                                                "contract_version": 1})
+                except ValueError as exc:
+                    return self.send_data(400, {"error": str(exc)})
+                except BlockingIOError:
+                    return self.send_data(429, {"error": "Inference queue is full."})
+                except RuntimeError:
+                    return self.send_data(503, {"error": "Resident service is not ready."})
+            if path.startswith("/api/v2/runs/") and path.endswith("/cancel"):
+                if getattr(manager, "mode", "cold") != "resident":
+                    return self.send_data(404, {"error": "Resident API is not enabled."})
+                if payload != {}:
+                    return self.send_data(400, {"error": "Cancellation expects an empty JSON object."})
+                found = manager.cancel(path[len("/api/v2/runs/"):-len("/cancel")])
+                return self.send_data(202 if found else 404, {"status": "cancellation_requested"} if found else {"error": "Run not found."})
             if path.startswith("/api/runs/") and path.endswith("/cancel"):
                 if payload != {}:
                     return self.send_data(400, {"error": "Cancellation expects an empty JSON object."})
@@ -213,10 +243,18 @@ def main(argv=None):
     parser.add_argument("--baseline-config", type=Path, default=ROOT / "experiments/qwen38-27b-q4.json")
     parser.add_argument("--optimized-config", type=Path, default=ROOT / "experiments/qwen38-27b-q4-gpu40.json")
     parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument("--execution-mode", choices=("cold", "resident"), default="cold")
+    parser.add_argument("--state-path", type=Path, default=None,
+                        help="SQLite V2 job ledger path (resident mode only)")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("port must be 0–65535")
-    manager = DemoManager(args.binary, args.model, args.output_root, load_config(args.baseline_config), load_config(args.optimized_config))
+    baseline_config = load_config(args.baseline_config)
+    if args.execution_mode == "resident":
+        manager = ResidentDemoManager(args.binary, args.model, args.output_root, baseline_config,
+                                       state_path=args.state_path)
+    else:
+        manager = DemoManager(args.binary, args.model, args.output_root, baseline_config, load_config(args.optimized_config))
     server = DemoHTTPServer(("127.0.0.1", args.port), handler_for(manager))
     def shutdown_signal(signum, frame):
         # shutdown() must run outside serve_forever's thread.

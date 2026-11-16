@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 import threading
 import time
@@ -12,6 +14,10 @@ from ..acquisition import verify_model
 from ..telemetry import ResourceSampler, response_metrics, gpu_probe
 from ..runtime import LocalServer, RuntimeFailure, RunCancelled, runtime_identity
 from ..artifacts import write_json_new
+from ..llmops.durable import DurableJobStore, EvidenceRef, DurableJobError
+from ..serving import InMemoryEventSink, ObservationRecorder, ResidentSupervisor, stream_events
+from ..serving.admission import AdmissionQueue, AdmissionRejected, AdmissionStatus
+from ..v2_contracts import ErrorEnvelope, InferenceRequest, InferenceResponse
 
 LIMITS = {"max_prompt_chars": 3000, "min_tokens": 16, "max_tokens": 256}
 EXAMPLES = [
@@ -37,6 +43,7 @@ def safe_error(exc):
 
 
 class DemoManager:
+    mode = "cold"
     def __init__(self, binary, model, output_root, baseline_config, optimized_config, *, verify_async=True):
         self.binary, self.model, self.output_root = Path(binary), Path(model), Path(output_root)
         self.configs = {"baseline": baseline_config, "optimized": optimized_config}
@@ -274,5 +281,371 @@ class DemoManager:
             worker.join(timeout=15)
             if worker.is_alive():
                 raise RuntimeFailure("inference worker did not stop")
+
+
+class _ResidentLocalEngine:
+    """One owned llama-server process adapted to the resident engine seam."""
+
+    def __init__(self, binary, model, runtime_config, directory, deadline):
+        self.server = LocalServer(binary, model, runtime_config, directory, deadline)
+
+    def start(self):
+        self.server.start()
+
+    def ready(self):
+        return self.server.process is not None and self.server.process.poll() is None
+
+    def stop(self):
+        self.server.stop()
+
+    def generate(self, request, cancellation):
+        if cancellation.is_set():
+            raise RunCancelled()
+        result = self.server.chat(request.prompt, max_tokens=request.max_new_tokens, temperature=0, seed=42)
+        if cancellation.is_set():
+            raise RunCancelled()
+        return result
+
+
+class ResidentDemoManager:
+    """Local V2 HTTP manager backed by one resident engine and durable state.
+
+    This class is deliberately separate from :class:`DemoManager`: V1 requests
+    use the old cold-process/variant protocol, while V2 requests are mapped to
+    ``InferenceRequest`` and cannot accidentally select V1 fields or paths.
+    ``engine_factory`` is an explicit fake-engine seam for tests and local
+    service development; production construction supplies the owned llama
+    server adapter above.
+    """
+
+    mode = "resident"
+    contract_version = 1
+
+    def __init__(self, binary, model, output_root, config, *, engine_factory=None,
+                 state_path=None, max_queue=16, request_timeout=1200,
+                 source_commit=None, sink=None, verify_async=True):
+        self.binary, self.model, self.output_root = Path(binary), Path(model), Path(output_root)
+        self.config = copy.deepcopy(config)
+        self.output_root.mkdir(parents=True, exist_ok=True)
+        self.model_id = self.config.get("model", {}).get("filename", "qwen-model").replace(".gguf", "")
+        self.config_id = self.config.get("runtime", {}).get("revision", "resident")
+        self.context_size = int(self.config.get("runtime", {}).get("context_size", 4096))
+        self.request_timeout = request_timeout
+        self.source_commit = source_commit or ("0" * 40)
+        if not isinstance(self.source_commit, str) or len(self.source_commit) != 40:
+            raise ValueError("source_commit must be a 40-character commit")
+        self.sink = sink or InMemoryEventSink()
+        self.recorder = ObservationRecorder(self.sink)
+        self.store = DurableJobStore(state_path or self.output_root / "v2-jobs.sqlite3")
+        self.db_lock = threading.RLock()
+        # A restart never resumes an in-flight generation.
+        with self.db_lock:
+            self.store.recover()
+        self.lock = threading.RLock()
+        self.handles, self.observations, self.deadlines = {}, {}, {}
+        self.closing = False
+        self.status, self.error, self.identity = ("checking" if verify_async else "ready"), None, None
+        self.engine_factory = engine_factory or self._default_factory
+        self.supervisor = ResidentSupervisor(self.engine_factory)
+        self.queue = AdmissionQueue(self.supervisor, context_size=self.context_size,
+                                    max_queue=max_queue, runner=self._run_request,
+                                    cleanup=self._finish_request)
+        if verify_async:
+            self.identity_worker = threading.Thread(target=self.verify, daemon=True)
+            self.identity_worker.start()
+        else:
+            self.identity_worker = None
+
+    def _default_factory(self):
+        directory = self.output_root / "resident-engine"
+        directory.mkdir(parents=True, exist_ok=True)
+        return _ResidentLocalEngine(self.binary, self.model, self.config["runtime"],
+                                    directory, time.monotonic() + self.request_timeout)
+
+    def verify(self):
+        """Perform the same fail-closed identity checks as V1 when possible."""
+        try:
+            identity = {
+                "model": verify_model(self.model, self.config["model"]),
+                "runtime": runtime_identity(self.binary, self.config["runtime"]["revision"]),
+            }
+            with self.lock:
+                self.identity, self.status, self.error = identity, "ready", None
+        except Exception as exc:
+            with self.lock:
+                self.status, self.error = "blocked", safe_error(exc)
+
+    def info(self):
+        with self.lock:
+            return {
+                "mode": self.mode, "contract_version": self.contract_version,
+                "model": self.model_id, "config_id": self.config_id,
+                "ready": self.status == "ready" and not self.closing,
+                "status": self.status, "busy": self.queue.active is not None,
+                "queued": self.queue.queued, "limits": {
+                    "max_prompt_chars": 3000, "min_tokens": 1,
+                    "max_tokens": 4096, "context_size": self.context_size,
+                },
+            }
+
+    @staticmethod
+    def _error(code, message, request_id=None, retryable=False):
+        return ErrorEnvelope(code=code, message=message, request_id=request_id, retryable=retryable).to_dict()
+
+    def _public_record(self, record):
+        result = {
+            "id": record.job_id, "request_id": record.request_id, "run_id": record.run_id,
+            "status": record.state, "phase": record.state, "created_at": record.created_at,
+            "updated_at": record.updated_at, "contract_version": self.contract_version,
+        }
+        metadata = record.metadata
+        if "response" in metadata:
+            result["response"] = copy.deepcopy(metadata["response"])
+        if "events" in metadata:
+            result["events"] = copy.deepcopy(metadata["events"])
+        if record.terminal_record and record.terminal_record.get("error"):
+            result["error"] = copy.deepcopy(record.terminal_record["error"])
+        if record.terminal_record:
+            provenance = record.terminal_record.get("provenance", {})
+            if provenance.get("error"):
+                result["error"] = copy.deepcopy(provenance["error"])
+        return result
+
+    def get(self, job_id):
+        try:
+            with self.db_lock:
+                record = self.store.get(job_id)
+        except DurableJobError:
+            return None
+        return self._public_record(record) if record else None
+
+    def history(self):
+        # SQLite ordering is stable and records remain available across restart.
+        with self.db_lock, self.store._connection as connection:
+            rows = connection.execute("SELECT job_id FROM jobs ORDER BY created_at DESC LIMIT 100").fetchall()
+        return {"runs": [self.get(row[0]) for row in rows]}
+
+    def _request(self, payload):
+        if not isinstance(payload, dict):
+            raise ValueError("V2 request must be a JSON object")
+        forbidden = {"max_tokens", "variants", "binary", "model", "runtime"}
+        if forbidden.intersection(payload):
+            raise ValueError("V1 request fields cannot be used in resident mode")
+        allowed = {"request_id", "prompt", "model_id", "config_id", "max_new_tokens",
+                   "stream", "idempotency_key", "contract_version", "timeout_seconds"}
+        if set(payload) - allowed:
+            raise ValueError("unknown V2 request field")
+        if payload.get("contract_version", self.contract_version) != self.contract_version:
+            raise ValueError("unsupported request contract version")
+        request_id = payload.get("request_id") or uuid.uuid4().hex
+        model_id = payload.get("model_id", self.model_id)
+        config_id = payload.get("config_id", self.config_id)
+        if model_id != self.model_id or config_id != self.config_id:
+            raise ValueError("model_id and config_id are fixed by the local service")
+        timeout = payload.get("timeout_seconds", self.request_timeout)
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0 or timeout > self.request_timeout:
+            raise ValueError("timeout_seconds must be positive and bounded")
+        request = InferenceRequest(
+            request_id=request_id, prompt=payload.get("prompt", ""), model_id=model_id,
+            config_id=config_id, max_new_tokens=payload.get("max_new_tokens", 192),
+            stream=payload.get("stream", False), idempotency_key=payload.get("idempotency_key"),
+            contract_version=self.contract_version,
+        )
+        return request, float(timeout)
+
+    def submit(self, payload):
+        if self.status != "ready" or self.closing:
+            raise RuntimeError("resident service is not ready")
+        request, timeout = self._request(payload)
+        # Resolve retries before creating a second durable row.  The queue also
+        # validates the request fingerprint once an admitted handle exists.
+        if request.idempotency_key is not None:
+            with self.db_lock:
+                rows = self.store._connection.execute("SELECT job_id, metadata_json FROM jobs").fetchall()
+            for row in rows:
+                try:
+                    metadata = json.loads(row[1])
+                except (TypeError, ValueError):
+                    continue
+                if metadata.get("idempotency_key") == request.idempotency_key:
+                    with self.db_lock:
+                        existing = self.store.get(row[0])
+                    if existing is None:
+                        continue
+                    if metadata.get("request_fingerprint") != self._fingerprint(request):
+                        raise ValueError("idempotency key is bound to another request")
+                    return existing.job_id
+        # Durable queued state is committed before the admission worker can run.
+        try:
+            with self.db_lock:
+                self.store.create_job(request.request_id, request.request_id, request.request_id,
+                                      metadata={"model_id": request.model_id, "config_id": request.config_id,
+                                                "stream": request.stream,
+                                                "idempotency_key": request.idempotency_key,
+                                                "request_fingerprint": self._fingerprint(request)})
+        except DurableJobError as exc:
+            # Idempotent retries return the existing request only when the payload
+            # itself is identical; the queue enforces that same rule.
+            with self.db_lock:
+                existing = self.store.get(request.request_id)
+            if existing and existing.metadata.get("model_id") == request.model_id:
+                return request.request_id
+            raise ValueError("request_id is already in use") from exc
+        deadline = time.monotonic() + timeout
+        try:
+            handle = self.queue.submit(request, deadline=deadline)
+        except AdmissionRejected as exc:
+            try:
+                with self.db_lock:
+                    self.store.transition(request.request_id, "failed", reason=exc.code,
+                                          provenance={"source_commit": self.source_commit})
+            except DurableJobError:
+                pass
+            raise exc
+        with self.lock:
+            self.handles[request.request_id] = handle
+            self.deadlines[request.request_id] = deadline
+        return request.request_id
+
+    @staticmethod
+    def _fingerprint(request):
+        return [request.prompt, request.model_id, request.config_id,
+                request.max_new_tokens, request.stream, request.contract_version]
+
+    def cancel(self, request_id):
+        with self.lock:
+            handle = self.handles.get(request_id)
+        if handle is None:
+            return False
+        changed = handle.cancel()
+        if changed and handle.status is AdmissionStatus.CANCELLED:
+            try:
+                with self.db_lock:
+                    self.store.transition(request_id, "cancelled", reason="client cancellation")
+            except DurableJobError:
+                pass
+        return changed
+
+    def _run_request(self, engine, request, cancellation):
+        observation = self.recorder.start(request_id=request.request_id, job_id=request.request_id,
+                                           run_id=request.request_id, model_id=request.model_id,
+                                           config_id=request.config_id)
+        with self.lock:
+            self.observations[request.request_id] = observation
+        with self.db_lock:
+            self.store.transition(request.request_id, "running", reason="admitted")
+        observation.queue_complete()
+        observation.generation_start()
+        result = engine.generate(request, cancellation)
+        text_value, chunks = self._result_chunks(result)
+        if request.stream:
+            events = list(stream_events(chunks, request.request_id, request.request_id,
+                                        cancellation=cancellation.is_set,
+                                        on_cancel=cancellation.set))
+            for event in events:
+                if event.kind == "chunk":
+                    observation.stream_chunk(event.sequence)
+            return {"text": text_value, "events": [event.to_dict() for event in events]}
+        return {"text": text_value}
+
+    @staticmethod
+    def _result_chunks(result):
+        if isinstance(result, dict):
+            text_value = result.get("content", "")
+        else:
+            text_value = result
+        if isinstance(text_value, str):
+            return text_value, ([text_value] if text_value else [])
+        try:
+            chunks = list(text_value)
+        except TypeError as exc:
+            raise RuntimeFailure("engine returned a malformed response") from exc
+        if any(not isinstance(chunk, str) or not chunk for chunk in chunks):
+            raise RuntimeFailure("engine returned a malformed response")
+        return "".join(chunks), chunks
+
+    def _finish_request(self, request, value, error, cancellation):
+        observation = self.observations.get(request.request_id)
+        if observation is not None:
+            observation.generation_complete()
+            observation.cleanup_start()
+        deadline = self.deadlines.get(request.request_id)
+        expired = deadline is not None and time.monotonic() >= deadline
+        if expired:
+            status, reason, code = "deadline_exceeded", "request deadline exceeded", "deadline_exceeded"
+        elif cancellation.is_set():
+            status, reason, code = "cancelled", "client cancellation", "cancelled"
+        elif error is not None:
+            status, reason, code = "failed", "inference failed", "inference_failed"
+        else:
+            status, reason, code = "completed", "inference completed", None
+        with self.db_lock:
+            existing = self.store.get(request.request_id)
+        metadata = dict(existing.metadata) if existing else {}
+        if value is not None and isinstance(value, dict):
+            text_value = value.get("text", "")
+            if status == "completed":
+                response = InferenceResponse(request.request_id, request.request_id, request.model_id,
+                                             text_value, "stop").to_dict()
+                metadata["response"] = response
+                if "events" in value:
+                    metadata["events"] = value["events"]
+        if observation is not None:
+            observation.cleanup_complete()
+            error_envelope = self._error(code, reason, request.request_id, retryable=(status == "failed")) if code else None
+            observation.terminal(status=status, error_code=code, error_message=reason)
+        try:
+            if status == "completed":
+                directory = self.output_root / request.request_id
+                directory.mkdir(parents=True, exist_ok=True)
+                evidence_path = directory / "response.json"
+                evidence_path.write_text(json.dumps(metadata, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+                digest = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+                evidence = EvidenceRef(str(evidence_path), digest, self.source_commit)
+                with self.db_lock:
+                    self.store.transition(request.request_id, "completed", reason=reason, evidence=evidence,
+                                          provenance={"source_commit": self.source_commit, "request_id": request.request_id})
+                    self.store._connection.execute("UPDATE jobs SET metadata_json=? WHERE job_id=?",
+                                                   (json.dumps(metadata, ensure_ascii=False, sort_keys=True), request.request_id))
+                    self.store._connection.commit()
+            else:
+                terminal = {"error": self._error(code, reason, request.request_id, retryable=(status == "failed"))}
+                with self.db_lock:
+                    self.store.transition(request.request_id, status, reason=reason,
+                                          provenance={"source_commit": self.source_commit,
+                                                      "error": terminal["error"]})
+                # Keep the public error in the manager's in-memory sidecar;
+                # durable transition remains the authoritative state machine.
+                with self.lock:
+                    self._errors = getattr(self, "_errors", {})
+                    self._errors[request.request_id] = terminal["error"]
+        except DurableJobError:
+            with self.lock:
+                self.status, self.error = "blocked", "durable job state could not be finalized"
+        finally:
+            with self.lock:
+                if observation is not None:
+                    self.observations.pop(request.request_id, None)
+
+    def get(self, job_id):
+        try:
+            with self.db_lock:
+                record = self.store.get(job_id)
+        except DurableJobError:
+            return None
+        if record is None:
+            return None
+        result = self._public_record(record)
+        with self.lock:
+            error = getattr(self, "_errors", {}).get(job_id)
+        if error:
+            result["error"] = copy.deepcopy(error)
+        return result
+
+    def shutdown(self):
+        with self.lock:
+            self.closing = True
+        self.queue.shutdown(stop_engine=True, timeout=15)
+        self.store.close()
 
 

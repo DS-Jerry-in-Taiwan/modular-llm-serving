@@ -1,10 +1,11 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  const terminal = new Set(['completed', 'failed', 'cancelled']);
-  const phaseNames = {queued:'等待執行', loading:'載入模型', running:'正在推論', completed:'已完成', failed:'執行失敗', cancelled:'已停止', checking:'驗證模型'};
+  const terminal = new Set(['completed', 'failed', 'cancelled', 'deadline_exceeded']);
+  const phaseNames = {queued:'等待執行', loading:'載入模型', running:'正在推論', generating:'正在推論', cleaning_up:'清理中', completed:'已完成', failed:'執行失敗', cancelled:'已停止', deadline_exceeded:'已超時', checking:'驗證模型'};
+  const V2_API = '/api/v2';
   let info = null, job = null, jobTimer = null, infoTimer = null, polling = false, submitting = false;
-  let history = [], activeExample = 'custom', currentRequest = null;
+  let history = [], activeExample = 'custom', currentRequest = null, executionMode = 'cold';
   const storage = {get(key) {try {return localStorage.getItem(key);} catch {return null;}}, set(key,value) {try {localStorage.setItem(key,value);} catch {}}, remove(key) {try {localStorage.removeItem(key);} catch {}}};
   const make = (tag, cls, value) => {const el = document.createElement(tag); if(cls) el.className=cls; if(value!==undefined) el.textContent=value; return el;};
   const fmt = value => Number.isFinite(value) ? value.toFixed(2) : '—';
@@ -16,16 +17,49 @@
     if(!response.ok) {const failure=new Error(typeof data.error==='string' ? data.error : typeof data.detail==='string' ? data.detail : `請求失敗（${response.status}）`);failure.status=response.status;throw failure;}
     return data;
   }
+  function residentMode() {return executionMode==='resident';}
+  function modeLabel() {return residentMode() ? 'Warm resident' : 'Cold benchmark';}
+  function renderMode() {
+    const resident=residentMode();
+    document.querySelectorAll('input[name="execution-mode"]').forEach(input=>{input.checked=input.value===executionMode;});
+    document.querySelector('.variant-picker').hidden=resident;
+    $('streamOption').hidden=!resident;
+    $('streamOutput').disabled=!resident;
+    $('protocolBadge').textContent=resident ? 'V2 · resident / contract v1' : 'V1 · cold / JSON';
+    $('protocolDetail').textContent=resident ? '常駐 engine 由 FIFO admission queue 管理；串流只接受 V2 StreamEvent。' : '每個配置獨立啟動 llama-server；請求時間不含模型載入。';
+    $('modeNotice').textContent=resident ? 'Warm resident 會保留一個模型 engine。請求先進入 bounded queue；可串流收到 chunk，terminal event 才代表完成。' : 'Cold benchmark 會依序執行兩個配置，每次切換需重新載入模型。測試期間請保持頁面開啟；重新整理可恢復查看。';
+  }
+  function lifecycleValue(value) {return value === undefined || value === null || value === '' ? '—' : String(value);}
+  function renderLifecycle() {
+    const visible=residentMode() || job?.execution_mode==='resident';
+    $('v2Lifecycle').hidden=!visible;
+    if(!visible) return;
+    const timings=job?.phase_timings || job?.timings || {}, metrics=job?.metrics || {};
+    $('lifecycleStatus').textContent=job ? `${modeLabel()} · ${phase(job.status)}` : '等待請求';
+    $('lifecycleProtocol').textContent=`contract v${job?.contract_version || 1}`;
+    $('requestId').textContent=lifecycleValue(job?.request_id);
+    $('runId').textContent=lifecycleValue(job?.run_id || job?.id);
+    $('queueState').textContent=lifecycleValue(job?.queue_status || (job?.status==='queued' ? 'queued' : job ? 'admitted' : null));
+    $('streamState').textContent=job?.stream ? `${job.stream_status || 'open'}${Number.isInteger(job.stream_sequence) ? ` · ${job.stream_sequence} events` : ''}` : 'non-stream';
+    $('terminalState').textContent=job?.terminal_event ? 'received' : job && terminal.has(job.status) ? phase(job.status) : 'pending';
+    const timingParts=Object.entries(timings).map(([key,value])=>`${key}: ${fmt(typeof value==='object' ? value.value : value)} s`);
+    $('phaseTimings').textContent=timingParts.length ? timingParts.join(' · ') : '尚未收到 phase timing。';
+    const metricParts=Object.entries(metrics).map(([key,value])=>`${key}: ${lifecycleValue(typeof value==='object' ? value.value : value)}`);
+    $('v2Metrics').textContent=metricParts.length ? metricParts.join(' · ') : '尚未收到 metrics。';
+  }
   function updateControls() {
     const active = job && !terminal.has(job.status), chosen = [...document.querySelectorAll('.variant-picker input:checked')];
-    $('run').disabled=submitting || !info?.ready || info?.busy || active || !$('prompt').value.trim() || chosen.length===0;
-    $('run').firstElementChild.textContent=job?.status==='failed' ? '重新執行測試' : chosen.length===2 ? '開始 A/B 測試' : `執行 ${chosen[0]?.value==='optimized' ? 'B 最佳化' : 'A 基準'}配置`;
+    $('run').disabled=submitting || !info?.ready || info?.busy || active || !$('prompt').value.trim() || (!residentMode() && chosen.length===0);
+    $('run').firstElementChild.textContent=job?.status==='failed' ? '重新執行測試' : residentMode() ? '送出 V2 請求' : chosen.length===2 ? '開始 A/B 測試' : `執行 ${chosen[0]?.value==='optimized' ? 'B 最佳化' : 'A 基準'}配置`;
     $('cancel').hidden=!active; $('cancel').disabled=submitting || job?.status==='cancelling';
     $('export').disabled=!job;
     document.querySelectorAll('.variant-picker input').forEach(el=>el.disabled=!!active || submitting);
     $('prompt').disabled=!!active || submitting; $('maxTokens').disabled=!!active || submitting;
+    $('streamOutput').disabled=!residentMode() || !!active || submitting;
     document.querySelectorAll('.tab').forEach(el=>el.disabled=!!active || submitting);
     $('charCount').textContent=$('prompt').value.length.toLocaleString();
+    renderMode();
+    renderLifecycle();
   }
   function renderInfo() {
     const ready=info?.ready, busy=info?.busy;
@@ -68,7 +102,10 @@
     number.append(make('span','',unit)); box.append(number,make('small','',label)); parent.append(box);
   }
   function renderCard(id) {
-    const card=$(`card-${id}`), result=job?.variants?.find(v=>v.id===id), label=id==='baseline' ? 'A · 基準配置' : 'B · 最佳化配置';
+    const card=$(`card-${id}`), result=job?.variants?.find(v=>v.id===id); let label=id==='baseline' ? 'A · 基準配置' : 'B · 最佳化配置';
+    if(residentMode() && id==='optimized') {card.hidden=true; card.replaceChildren(); return;}
+    card.hidden=false;
+    if(residentMode() && id==='baseline') label='V2 · 常駐模型';
     card.replaceChildren();
     const head=make('div','answer-head'), heading=make('div','answer-heading');
     heading.append(make('span','config-letter',id==='baseline'?'A':'B'),make('span','',label.slice(4)));
@@ -110,14 +147,32 @@
       compare.append(make('strong','',`B 請求時間${change>=0?'減少':'增加'} ${Math.abs(change).toFixed(1)}% · A/B 時間比 ${ratio.toFixed(2)}×`),make('span','', '僅比較本次相同輸入；輸出長度可能不同，時間比不代表品質保證。'));
     }
     if(job?.error) error(job.error);
+    renderLifecycle();
+  }
+  function v2Path(id='') {return `${V2_API}/runs${id ? `/${encodeURIComponent(id)}` : ''}`;}
+  function applyV2Payload(payload) {
+    const events=payload?.events || payload?.stream_events || [];
+    let text=typeof payload?.text==='string' ? payload.text : (job?.text || '');
+    let sequence=job?.stream_sequence;
+    for(const event of events) {
+      if(!event || typeof event!=='object') continue;
+      if(event.kind==='chunk' && typeof event.text==='string') {text+=event.text;sequence=event.sequence;}
+      if(event.kind==='terminal') {payload.terminal_event=true;payload.stream_status='terminal';}
+      if(event.kind==='error') {payload.error=event.error?.message || '串流協定回報錯誤';payload.stream_status='error';}
+    }
+    if(text) payload.text=text;
+    if(Number.isInteger(sequence)) payload.stream_sequence=sequence;
+    if(payload.stream && !payload.stream_status) payload.stream_status='open';
+    payload.variants=Array.isArray(payload.variants) ? payload.variants : [{id:'baseline',status:payload.status || 'running',text:payload.text || '',request_seconds:payload.metrics?.request_seconds,output_tokens:payload.metrics?.completion_tokens}];
+    return payload;
   }
   async function pollJob(id) {
     if(polling) return;
     polling=true;
     try {
-      const next=await api(`/api/runs/${encodeURIComponent(id)}`);
+      const next=await api(residentMode() || job?.execution_mode==='resident' ? v2Path(id) : `/api/runs/${encodeURIComponent(id)}`);
       if(job?.id && job.id!==id) return;
-      job=next;error('');renderJob();
+      job=(residentMode() || job?.execution_mode==='resident') ? applyV2Payload({...next,execution_mode:'resident',run_id:next.run_id || id,request_id:next.request_id || job?.request_id}) : next;error('');renderJob();
       if(terminal.has(job.status)) {clearTimeout(jobTimer);await Promise.allSettled([refreshHistory(),refreshInfo()]);}
       else jobTimer=setTimeout(()=>pollJob(id),900);
     } catch(err) {
@@ -129,19 +184,22 @@
   async function run() {
     if($('run').disabled) return;
     error(''); submitting=true;updateControls();
-    currentRequest={prompt:$('prompt').value,max_tokens:Number($('maxTokens').value),variants:[...document.querySelectorAll('.variant-picker input:checked')].map(el=>el.value)};
+    const resident=residentMode();
+    currentRequest=resident ? {contract_version:1,request_id:globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `req-${Date.now()}`,prompt:$('prompt').value,model_id:info?.model_id || 'qwen',config_id:info?.config_id || 'resident',max_new_tokens:Number($('maxTokens').value),stream:$('streamOutput').checked,idempotency_key:`web-${Date.now()}-${Math.random().toString(16).slice(2)}`} : {prompt:$('prompt').value,max_tokens:Number($('maxTokens').value),variants:[...document.querySelectorAll('.variant-picker input:checked')].map(el=>el.value)};
     try {
-      const next=await api('/api/runs',{method:'POST',body:JSON.stringify(currentRequest)});
-      clearTimeout(jobTimer);job={id:next.id,status:'queued',variants:currentRequest.variants.map(id=>({id,status:'queued'}))};
-      storage.set('qwen-lab-job',next.id);storage.set('qwen-lab-input',JSON.stringify(currentRequest));
-      renderJob();await pollJob(next.id);
+      const next=await api(resident ? v2Path() : '/api/runs',{method:'POST',body:JSON.stringify(currentRequest)});
+      const id=next.id || next.run_id || next.request_id;
+      if(!id) throw new Error('伺服器未回傳 run_id');
+      clearTimeout(jobTimer);job=resident ? applyV2Payload({...next,id,execution_mode:'resident',status:next.status || 'queued',request_id:next.request_id || currentRequest.request_id,run_id:next.run_id || id,stream:currentRequest.stream,variants:[]}) : {id,status:'queued',variants:currentRequest.variants.map(id=>({id,status:'queued'}))};
+      storage.set('qwen-lab-job',id);storage.set('qwen-lab-input',JSON.stringify({...currentRequest,execution_mode:resident?'resident':'cold'}));
+      renderJob();await pollJob(id);
     } catch(err) {error(`無法開始測試：${err.message}。請檢查服務狀態後再次執行。`);await refreshInfo();}
     finally {submitting=false;updateControls();}
   }
   async function cancel() {
     if(!job || terminal.has(job.status)) return;
     $('cancel').disabled=true;
-    try {await api(`/api/runs/${encodeURIComponent(job.id)}/cancel`,{method:'POST',body:'{}'});$('jobStatus').textContent='正在停止並清理模型…';}
+    try {await api(residentMode() || job.execution_mode==='resident' ? `${v2Path(job.id)}/cancel` : `/api/runs/${encodeURIComponent(job.id)}/cancel`,{method:'POST',body:'{}'});$('jobStatus').textContent='正在停止並清理模型…';}
     catch(err) {error(`停止失敗：${err.message}`);$('cancel').disabled=false;}
   }
   async function refreshHistory() {
@@ -194,6 +252,10 @@
     } catch {box.replaceChildren(make('p','reference-empty','暫時無法載入固定測試基準。即時測試仍可使用；完整資料請查看固定測試報告。'));}
   }
   $('run').addEventListener('click',run);$('cancel').addEventListener('click',cancel);
+  document.querySelectorAll('input[name="execution-mode"]').forEach(input=>input.addEventListener('change',()=>{
+    if(job && !terminal.has(job.status)) return;
+    executionMode=input.value;job=null;clearTimeout(jobTimer);error('');renderMode();renderJob();
+  }));
   $('prompt').addEventListener('input',()=>{activeExample='custom';selectTab();updateControls();});
   $('maxTokens').addEventListener('change',updateControls);
   document.querySelectorAll('.variant-picker input').forEach(el=>el.addEventListener('change',updateControls));
@@ -207,8 +269,8 @@
   renderJob();selectTab();
   const remembered=storage.get('qwen-lab-job');
   if(remembered) {
-    try {const input=JSON.parse(storage.get('qwen-lab-input') || 'null');if(input) {$('prompt').value=input.prompt || ''; $('maxTokens').value=String(input.max_tokens || 192);}} catch {}
-    job={id:remembered,status:'queued',variants:[]};renderJob();pollJob(remembered);
+    try {const input=JSON.parse(storage.get('qwen-lab-input') || 'null');if(input) {$('prompt').value=input.prompt || ''; $('maxTokens').value=String(input.max_tokens || input.max_new_tokens || 192); executionMode=input.execution_mode==='resident' ? 'resident' : 'cold';}} catch {}
+    job={id:remembered,status:'queued',execution_mode:executionMode,variants:[]};renderJob();pollJob(remembered);
   }
-  refreshInfo();refreshHistory();loadReference();
+  renderMode();refreshInfo();refreshHistory();loadReference();
 })();
