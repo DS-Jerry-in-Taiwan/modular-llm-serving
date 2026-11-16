@@ -3,6 +3,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from inference_lab.web.jobs import ResidentDemoManager
 
@@ -47,7 +48,8 @@ class ResidentAPITests(unittest.TestCase):
         FakeResidentEngine.entered = None
         FakeResidentEngine.release = threading.Event()
         config = {"model": {"filename": "qwen.gguf"},
-                  "runtime": {"revision": "a" * 40, "context_size": 128}}
+                  "runtime": {"revision": "a" * 40, "context_size": 128,
+                              "gpu_layers": 0, "threads": 1, "parallel": 1}}
         self.manager = ResidentDemoManager(
             "unused", "unused", self.temp.name, config,
             engine_factory=FakeResidentEngine, verify_async=False,
@@ -93,6 +95,16 @@ class ResidentAPITests(unittest.TestCase):
         result = self.wait_terminal(request_id)
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(self.manager.store.get(request_id).state, "cancelled")
+
+    def test_resident_engine_instances_use_unique_evidence_directories(self):
+        with patch("inference_lab.runtime.free_loopback_port", return_value=19001):
+            first = self.manager._default_factory()
+            second = self.manager._default_factory()
+        self.assertNotEqual(first.server.run_dir, second.server.run_dir)
+        self.assertEqual(first.server.run_dir.parent, second.server.run_dir.parent)
+        self.assertEqual(first.server.run_dir.parent.name, "resident-engine")
+        self.assertTrue(first.server.run_dir.name.startswith("instance-"))
+        self.assertTrue(second.server.run_dir.name.startswith("instance-"))
 
     def test_stream_runner_failure_publishes_controlled_error_and_terminal(self):
         self.manager.shutdown()
