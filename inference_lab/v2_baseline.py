@@ -279,4 +279,3 @@ def write_package_new(output: str | Path, package: Mapping[str, Any]) -> None:
     with path.open("x", encoding="utf-8") as handle:
         json.dump(package, handle, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
         handle.write("\n")
-

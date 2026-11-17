@@ -46,4 +46,3 @@ class V2BaselinePackagingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
