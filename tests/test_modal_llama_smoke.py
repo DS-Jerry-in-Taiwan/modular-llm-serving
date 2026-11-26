@@ -124,13 +124,20 @@ class Clock:
 
     Without values it ticks 0.01 per call. Holding the last value keeps a polling
     loop that reads the clock more often than the test planned from failing.
+    A read limit makes a polling loop that never stops fail instead of hang.
     """
+
+    MAX_READS = 100
 
     def __init__(self, values=None):
         self.values = iter(values) if values is not None else None
         self.current = 0
+        self.reads = 0
 
     def __call__(self):
+        self.reads += 1
+        if self.reads > self.MAX_READS:
+            raise AssertionError("fake clock read too often: polling loop did not stop")
         if self.values is not None:
             self.current = next(self.values, self.current)
             return self.current
@@ -988,11 +995,19 @@ class ModalLlamaSmokeTests(unittest.TestCase):
             if m7.gate == "M7": cleanup_action.assert_called_once()
             else: cleanup_action.assert_not_called()
 
+    def test_fake_clock_fails_after_its_read_limit(self):
+        for clock in (Clock([1]), Clock()):
+            for _ in range(Clock.MAX_READS):
+                clock()
+            with self.assertRaises(AssertionError):
+                clock()
+
     def test_guarded_smoke_survives_an_operation_slower_than_one_poll(self):
         # The worker thread may still be alive at the first poll, so the clock is read
         # more than twice. Seen as a flaky StopIteration in the test above.
         now = datetime(2026, 8, 3, tzinfo=timezone.utc)
         cleanup_action = Mock()
+        observation = Mock(return_value=(spend(), True, 1))
 
         def operation(_):
             __import__("time").sleep(0.2)
@@ -1001,10 +1016,12 @@ class ModalLlamaSmokeTests(unittest.TestCase):
         self.assertEqual(
             smoke.run_guarded_smoke(
                 operation, cleanup_action, approval("M6"), approval("M7"),
-                costs(), timer(), Mock(return_value=(spend(), True, 1)), Clock([1, 2]), lambda: now,
+                costs(), timer(), observation, Clock([1, 2]), lambda: now,
             ),
             "ok",
         )
+        # One read before start, at least one poll, one after the worker ends.
+        self.assertGreaterEqual(observation.call_count, 3)
         cleanup_action.assert_called_once()
 
     def test_guarded_smoke_mid_operation_breach_triggers_cleanup(self):
