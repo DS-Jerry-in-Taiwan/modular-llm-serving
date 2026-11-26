@@ -19,7 +19,7 @@ The versioned JSON configuration pins a public model revision, file size and LFS
 
 ## Execution protocol and resource caps
 
-1. Establish genuine NVML/CUDA functionality. PCI/device presence alone is insufficient. A zero-byte `nvidia-smi` or driver `.so` file is not usable GPU support. Repair by isolated matching userspace libraries only after agreeing the execution approach; never replace system driver files automatically.
+1. Establish genuine NVML/CUDA functionality. PCI/device presence alone is insufficient. A zero-byte `nvidia-smi` or driver `.so` file is not usable GPU support. Repair only after agreeing the execution approach, and never replace system driver files automatically. On 2026-11-14 the repair used isolated matching userspace libraries; on 2026-11-26 the system driver packages were installed by an agreed manual step (see the host update below).
 2. Resolve the immutable quantized model and verify filename/size/SHA-256 after acquisition. Current Q4_K_M is 17,442,399,968 bytes; it needs CPU offload on 12GB. No image projector is needed for initial text tasks.
 3. Use an external pinned llama.cpp build, single request slot and 4096-token context. Start with 24 GPU layers and 8 CPU threads, validate actual allocation, and stop before OOM rather than silently switching to CPU-only or a different model.
 4. Smoke cap: 600 seconds. Then three text categories, at most six initial prompts, one warmup and two measured repeats; total initial experiment cap 3600 seconds. These are operational budgets, not performance acceptance thresholds.
@@ -28,22 +28,22 @@ The versioned JSON configuration pins a public model revision, file size and LFS
 
 ## Host observation on 2026-11-14
 
-Escalated read-only checks identified RTX 3080 12GB via PCI, `/dev/nvidia0`, NVIDIA kernel driver 580.178.04, i5-13600K, 62 GiB RAM (~45 GiB available), and ~545 GiB available disk. `nvidia-smi` and matching libcuda/NVML files were **zero bytes**, so the initial NVML/CUDA probes failed `file too short`. Matching driver userspace libraries were subsequently recovered into a private cache without changing system files; use the explicit library options below and preserve both observations. Successful probes still do not prove inference compatibility. Ordinary sandbox checks additionally hide GPU nodes; report both observations separately.
+Escalated read-only checks identified RTX 3080 12GB via PCI, `/dev/nvidia0`, NVIDIA kernel driver 580.178.04, i5-13600K, 62 GiB RAM (~45 GiB available), and ~545 GiB available disk. `nvidia-smi` and matching libcuda/NVML files were **zero bytes**, so the initial NVML/CUDA probes failed `file too short`. Matching driver userspace libraries were subsequently recovered into a private cache without changing system files; The 2026-11-26 host update below replaced this with the repaired system driver; the private cache is now a fallback. Preserve both observations. Successful probes still do not prove inference compatibility. Ordinary sandbox checks additionally hide GPU nodes; report both observations separately.
 
-The 2026-11-14 T2–T5 runs below used this private cache through `LD_LIBRARY_PATH`. Their `results/*/REPRODUCE.md` files record that historical setup and are intentionally unchanged.
+The 2026-11-14 T2–T5 runs below used this private cache through `LD_LIBRARY_PATH`. The `REPRODUCE.md` files under `results/` record that historical setup and are intentionally unchanged.
 
 ## Host update on 2026-11-26: system driver repaired
 
 The container's system userspace driver now matches the host kernel module. `libnvidia-compute-580`, `nvidia-utils-580`, `nvidia-kernel-common-580` and `nvidia-firmware-580-580.178.04` were installed at exactly `580.178.04` from Ubuntu `noble-updates` and put on `apt-mark hold`. `nvidia-smi` works, a CUDA kernel test passed, and `preflight` without library options reported NVML `ok` (RTX 3080, 12 GiB) and CUDA `ok` (1 device). The private cache is no longer required. It remains on disk as a fallback.
 
-When the host NVIDIA driver changes, compare `/proc/driver/nvidia/version` with `dpkg -l libnvidia-compute-580`, install the matching version, and regenerate the Docker CDI spec (below).
+When the host NVIDIA driver changes, read the new version from `/proc/driver/nvidia/version` and compare it with `dpkg -l 'libnvidia-compute-*'`. The packages are on hold, so `apt-mark unhold` them first. Install the packages of the matching major version (for 590, `libnvidia-compute-590`, `nvidia-utils-590`, `nvidia-kernel-common-590` and `nvidia-firmware-590-<version>`) at the exact version, `apt-mark hold` the new packages, and regenerate the Docker CDI spec (below).
 
 Default preflight (system libraries):
 
 ```sh
 venv/bin/python -m inference_lab preflight \
   --config experiments/qwen38-27b-q4.json --check-network \
-  --output docs/agent_context/inference-lab/preflight-unique.json
+  --output docs/agent_context/inference-lab/preflight-system-driver-20261126.json
 ```
 
 Fallback, only if the system libraries are broken again: add `--cuda-library` and `--nvml-library` pointing at `/home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu/libcuda.so.1` and `.../libnvidia-ml.so.1`, and prefix runtime commands with `LD_LIBRARY_PATH=/home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu`. These paths are host-specific, not portable defaults. Changing library paths does not bypass sandbox device restrictions. Check the new report for NVML and CUDA success before T2.
@@ -56,7 +56,7 @@ Docker runs nested inside this LXC container. `--gpus all` first failed with `bp
 sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
 ```
 
-`--gpus all`, `--device nvidia.com/gpu=all` and `--runtime nvidia` all expose the GPU. Some graphics libraries in the CDI spec are zero-byte placeholders; CUDA compute is unaffected.
+`--gpus all` and `--device nvidia.com/gpu=all` expose the GPU. `--runtime nvidia` alone exposes it only when the image sets `NVIDIA_VISIBLE_DEVICES` (NVIDIA CUDA base images, such as the `server-cuda` image below, set it to `all`); otherwise add `-e NVIDIA_VISIBLE_DEVICES=all`. Some graphics libraries in the CDI spec are zero-byte placeholders; CUDA compute is unaffected.
 
 One manual check used `ghcr.io/ggml-org/llama.cpp:server-cuda` (image build not recorded) with the pinned Q4_K_M model mounted read-only, `-ngl 24 -c 4096 -t 8 -np 1`, bound to `127.0.0.1:18181`. Port 18080 is used by an unrelated Label Studio container. The server became healthy in about 30 seconds and used about 6.6 GB device VRAM. A non-thinking Traditional Chinese prompt returned a coherent answer at about 3.15 generated tokens/s (92 tokens) and 8.3 prompt tokens/s (24 tokens). The container was then removed. This is a single unrecorded observation, not a harness run or baseline, and the Docker image is not the pinned `fa676981` runtime.
 
