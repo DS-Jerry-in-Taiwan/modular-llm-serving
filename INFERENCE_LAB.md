@@ -28,7 +28,7 @@ The versioned JSON configuration pins a public model revision, file size and LFS
 
 ## Host observation on 2026-11-14
 
-Escalated read-only checks identified RTX 3080 12GB via PCI, `/dev/nvidia0`, NVIDIA kernel driver 580.178.04, i5-13600K, 62 GiB RAM (~45 GiB available), and ~545 GiB available disk. `nvidia-smi` and matching libcuda/NVML files were **zero bytes**, so the initial NVML/CUDA probes failed `file too short`. Matching driver userspace libraries were subsequently recovered into a private cache without changing system files; The 2026-11-26 host update below replaced this with the repaired system driver; the private cache is now a fallback. Preserve both observations. Successful probes still do not prove inference compatibility. Ordinary sandbox checks additionally hide GPU nodes; report both observations separately.
+Escalated read-only checks identified RTX 3080 12GB via PCI, `/dev/nvidia0`, NVIDIA kernel driver 580.178.04, i5-13600K, 62 GiB RAM (~45 GiB available), and ~545 GiB available disk. `nvidia-smi` and matching libcuda/NVML files were **zero bytes**, so the initial NVML/CUDA probes failed `file too short`. Matching driver userspace libraries were subsequently recovered into a private cache without changing system files. The 2026-11-26 host update below replaced this with the repaired system driver; the private cache is now a fallback. Preserve both observations. Successful probes still do not prove inference compatibility. Ordinary sandbox checks additionally hide GPU nodes; report both observations separately.
 
 The 2026-11-14 T2–T5 runs below used this private cache through `LD_LIBRARY_PATH`. The `REPRODUCE.md` files under `results/` record that historical setup and are intentionally unchanged.
 
@@ -50,7 +50,7 @@ Fallback, only if the system libraries are broken again: add `--cuda-library` an
 
 ### Docker GPU access (2026-11-26)
 
-Docker runs nested inside this LXC container. `--gpus all` first failed with `bpf_prog_query(BPF_CGROUP_DEVICE) failed: operation not permitted`. The fix sets `no-cgroups = true` in `/etc/nvidia-container-runtime/config.toml` (original kept as `config.toml.bak-20261126`), which relaxes per-container GPU device isolation. A CDI spec was also generated at `/etc/cdi/nvidia.yaml`; regenerate it after any driver change:
+Docker runs nested inside this LXC container. `--gpus all` first failed with `bpf_prog_query(BPF_CGROUP_DEVICE) failed: operation not permitted`. The fix sets `no-cgroups = true` in `/etc/nvidia-container-runtime/config.toml` (original kept as `config.toml.bak-20261126`), which relaxes per-container GPU device isolation. Only trusted local lab containers may run on this Docker daemon. To restore isolation, put back `/etc/nvidia-container-runtime/config.toml.bak-20261126`. A CDI spec was also generated at `/etc/cdi/nvidia.yaml`; regenerate it after any driver change:
 
 ```sh
 sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
