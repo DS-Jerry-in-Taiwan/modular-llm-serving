@@ -1007,10 +1007,18 @@ class ModalLlamaSmokeTests(unittest.TestCase):
         # more than twice. Seen as a flaky StopIteration in the test above.
         now = datetime(2026, 8, 3, tzinfo=timezone.utc)
         cleanup_action = Mock()
-        observation = Mock(return_value=(spend(), True, 1))
+        polled = __import__("threading").Event()
+
+        def observe():
+            if observation.call_count >= 2:  # 1 = before start, 2 = first poll
+                polled.set()
+            return spend(), True, 1
+
+        observation = Mock(side_effect=observe)
 
         def operation(_):
-            __import__("time").sleep(0.2)
+            # Finish only after the first poll, so the poll path always runs.
+            self.assertTrue(polled.wait(5))
             return "ok"
 
         self.assertEqual(
