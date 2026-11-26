@@ -30,17 +30,35 @@ The versioned JSON configuration pins a public model revision, file size and LFS
 
 Escalated read-only checks identified RTX 3080 12GB via PCI, `/dev/nvidia0`, NVIDIA kernel driver 580.178.04, i5-13600K, 62 GiB RAM (~45 GiB available), and ~545 GiB available disk. `nvidia-smi` and matching libcuda/NVML files were **zero bytes**, so the initial NVML/CUDA probes failed `file too short`. Matching driver userspace libraries were subsequently recovered into a private cache without changing system files; use the explicit library options below and preserve both observations. Successful probes still do not prove inference compatibility. Ordinary sandbox checks additionally hide GPU nodes; report both observations separately.
 
-Private matching library paths for this host:
+The 2026-11-14 T2–T5 runs below used this private cache through `LD_LIBRARY_PATH`. Their `results/*/REPRODUCE.md` files record that historical setup and are intentionally unchanged.
+
+## Host update on 2026-11-26: system driver repaired
+
+The container's system userspace driver now matches the host kernel module. `libnvidia-compute-580`, `nvidia-utils-580`, `nvidia-kernel-common-580` and `nvidia-firmware-580-580.178.04` were installed at exactly `580.178.04` from Ubuntu `noble-updates` and put on `apt-mark hold`. `nvidia-smi` works, a CUDA kernel test passed, and `preflight` without library options reported NVML `ok` (RTX 3080, 12 GiB) and CUDA `ok` (1 device). The private cache is no longer required. It remains on disk as a fallback.
+
+When the host NVIDIA driver changes, compare `/proc/driver/nvidia/version` with `dpkg -l libnvidia-compute-580`, install the matching version, and regenerate the Docker CDI spec (below).
+
+Default preflight (system libraries):
 
 ```sh
 venv/bin/python -m inference_lab preflight \
   --config experiments/qwen38-27b-q4.json --check-network \
-  --cuda-library /home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu/libcuda.so.1 \
-  --nvml-library /home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 \
-  --output docs/agent_context/inference-lab/preflight-private-driver-unique.json
+  --output docs/agent_context/inference-lab/preflight-unique.json
 ```
 
-These paths are host-specific operational inputs, not portable configuration defaults. Run with actual device access; changing library paths does not bypass sandbox device restrictions. Check the new report for NVML and CUDA success before T2. For a future runtime process, its dynamic linker also needs the isolated driver library directory (for example through `LD_LIBRARY_PATH` scoped to that process).
+Fallback, only if the system libraries are broken again: add `--cuda-library` and `--nvml-library` pointing at `/home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu/libcuda.so.1` and `.../libnvidia-ml.so.1`, and prefix runtime commands with `LD_LIBRARY_PATH=/home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu`. These paths are host-specific, not portable defaults. Changing library paths does not bypass sandbox device restrictions. Check the new report for NVML and CUDA success before T2.
+
+### Docker GPU access (2026-11-26)
+
+Docker runs nested inside this LXC container. `--gpus all` first failed with `bpf_prog_query(BPF_CGROUP_DEVICE) failed: operation not permitted`. The fix sets `no-cgroups = true` in `/etc/nvidia-container-runtime/config.toml` (original kept as `config.toml.bak-20261126`), which relaxes per-container GPU device isolation. A CDI spec was also generated at `/etc/cdi/nvidia.yaml`; regenerate it after any driver change:
+
+```sh
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+```
+
+`--gpus all`, `--device nvidia.com/gpu=all` and `--runtime nvidia` all expose the GPU. Some graphics libraries in the CDI spec are zero-byte placeholders; CUDA compute is unaffected.
+
+One manual check used `ghcr.io/ggml-org/llama.cpp:server-cuda` (image build not recorded) with the pinned Q4_K_M model mounted read-only, `-ngl 24 -c 4096 -t 8 -np 1`, bound to `127.0.0.1:18181`. Port 18080 is used by an unrelated Label Studio container. The server became healthy in about 30 seconds and used about 6.6 GB device VRAM. A non-thinking Traditional Chinese prompt returned a coherent answer at about 3.15 generated tokens/s (92 tokens) and 8.3 prompt tokens/s (24 tokens). The container was then removed. This is a single unrecorded observation, not a harness run or baseline, and the Docker image is not the pinned `fa676981` runtime.
 
 The official Qwen model and chosen quantized artifact were verified via the real HF API, not only a search index. The config records their immutable revisions. These metadata checks prove artifact availability, not inference performance.
 
@@ -63,7 +81,6 @@ venv/bin/python -m inference_lab acquire-model \
 Run one local-only, ticket-owned service, ask a short non-thinking smoke prompt, then stop it on success or failure:
 
 ```sh
-LD_LIBRARY_PATH=/home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu \
 venv/bin/python -m inference_lab smoke \
   --config experiments/qwen38-27b-q4.json \
   --binary /home/ubuntu/.cache/inference-lab/runtime/llama-fa676981/build/bin/llama-server \
@@ -86,7 +103,6 @@ Local evidence is retained under ignored `docs/agent_context/inference-lab/`: mo
 ## T3: task usefulness suite and independent review
 
 ```sh
-LD_LIBRARY_PATH=/home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu \
 venv/bin/python -m inference_lab suite \
   --config experiments/qwen38-27b-q4.json --dataset experiments/tasks-v1.json \
   --binary /home/ubuntu/.cache/inference-lab/runtime/llama-fa676981/build/bin/llama-server \
@@ -143,10 +159,9 @@ The measured12-request total improved from290.67s to199.39s (1.46× observed lat
 
 ## Local live comparison demo
 
-The loopback-only web interface runs the pinned Qwen3.8-27B Q4_K_M model on the local GPU. It compares the 24 GPU-layer baseline with the 40 GPU-layer configuration, sequentially, with confirmed owned-process cleanup between configurations. Start from the repository root with the existing private driver libraries available:
+The loopback-only web interface runs the pinned Qwen3.8-27B Q4_K_M model on the local GPU. It compares the 24 GPU-layer baseline with the 40 GPU-layer configuration, sequentially, with confirmed owned-process cleanup between configurations. Start from the repository root (system driver libraries; see the 2026-11-26 host update for the private-cache fallback):
 
 ```bash
-LD_LIBRARY_PATH=/home/ubuntu/.cache/inference-lab/runtime/nvidia-580.178.04/usr/lib/x86_64-linux-gnu \
 PYTHONDONTWRITEBYTECODE=1 venv/bin/python -m inference_lab.demo \
   --binary /home/ubuntu/.cache/inference-lab/runtime/llama-fa676981/build/bin/llama-server \
   --model /home/ubuntu/.cache/inference-lab/models/Qwen3.8-27B-Q4_K_M.gguf \
